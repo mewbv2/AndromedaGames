@@ -1,66 +1,104 @@
 package io.mewb.andromedaGames.game;
 
 import io.mewb.andromedaGames.AndromedaGames;
-import io.mewb.andromedaGames.koth.KoTHGame; // Import specific game types
-import me.lucko.helper.Events;
-import me.lucko.helper.terminable.TerminableConsumer;
-import me.lucko.helper.terminable.module.TerminableModule;
+import io.mewb.andromedaGames.config.ConfigManager;
+import io.mewb.andromedaGames.koth.KoTHGame;
+import org.bukkit.ChatColor;
+import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
-import org.jetbrains.annotations.NotNull;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
-public class GameManager implements TerminableModule {
+public class GameManager implements Listener {
 
     private final AndromedaGames plugin;
     private final Logger logger;
-    private final Map<String, Game> loadedGames; // Keyed by a unique game ID or name
-    private final Map<UUID, Game> playerCurrentGame; // Tracks which game a player is in
+    private final ConfigManager configManager; // Use ConfigManager
+    private final Map<String, Game> loadedGames;
+    private final Map<UUID, Game> playerCurrentGame;
 
     public GameManager(AndromedaGames plugin) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
+        this.configManager = plugin.getConfigManager(); // Get ConfigManager instance
         this.loadedGames = new HashMap<>();
         this.playerCurrentGame = new HashMap<>();
+    }
 
-        // Example: Load a default KoTH game instance (this would usually come from config)
-        // For now, let's imagine a config defines a KoTH game named "mountain_koth"
-        KoTHGame defaultKoTH = new KoTHGame(plugin, "mountain_koth", "koth_arena_1"); // Game ID, Arena ID
-        loadedGames.put(defaultKoTH.getGameId(), defaultKoTH);
+    public void initialize() {
+        plugin.getServer().getPluginManager().registerEvents(this, plugin);
+        logger.info("GameManager initialized and registered as event listener.");
+        loadGamesFromConfig();
     }
 
     public void loadGamesFromConfig() {
-        // TODO: Implement logic to read from a configuration file
-        // that defines various game instances, their types, and settings.
-        // For each game defined:
-        // 1. Determine game type (KoTH, Infection, etc.)
-        // 2. Create an instance of the appropriate Game class
-        // 3. Call game.loadConfig(configSection);
-        // 4. Add to loadedGames map
-        logger.info("Game configurations would be loaded here.");
+        logger.info("Loading all game configurations...");
+        loadedGames.clear(); // Clear existing games before loading new ones
 
-        // For now, just loading the default one if not already present.
-        if (!loadedGames.containsKey("mountain_koth")) {
-            KoTHGame defaultKoTH = new KoTHGame(plugin, "mountain_koth", "koth_arena_1");
-            loadedGames.put(defaultKoTH.getGameId(), defaultKoTH);
-            defaultKoTH.load(); // Call load on the game instance
-        } else {
-            loadedGames.get("mountain_koth").load();
+        // --- Load KoTH Games ---
+        Map<String, FileConfiguration> kothConfigs = configManager.loadAllGamesOfType("koth");
+        for (Map.Entry<String, FileConfiguration> entry : kothConfigs.entrySet()) {
+            String gameId = entry.getKey();
+            FileConfiguration gameConfig = entry.getValue();
+
+            if (!gameConfig.getBoolean("enabled", false)) {
+                logger.info("KoTH game '" + gameId + "' is disabled in config, skipping.");
+                continue;
+            }
+
+            // The arenaId could be the gameId itself if schematics are named that way,
+            // or a specific value from the config. Let's assume gameId can serve as arenaId for now.
+            // Or, more robustly, get it from config: gameConfig.getString("arena.schematic_name", gameId)
+            String arenaId = gameConfig.getString("arena.schematic_name", gameId); // Use schematic_name as arenaId
+
+            KoTHGame kothGame = new KoTHGame(plugin, gameId, arenaId); // Pass gameConfig to KoTHGame
+            kothGame.configure(gameConfig); // New method in KoTHGame to load its specific settings
+
+            if (kothGame.getGameState() != GameState.DISABLED) { // Only add if not disabled during its own load
+                loadedGames.put(gameId, kothGame);
+                logger.info("Successfully loaded and configured KoTH game: " + gameId);
+            } else {
+                logger.warning("KoTH game '" + gameId + "' was disabled during its load process (e.g., world/arena issue).");
+            }
         }
+
+        // --- Load Other Game Types (Future) ---
+        // Example:
+        // Map<String, FileConfiguration> infectionConfigs = configManager.loadAllGamesOfType("infection");
+        // for (Map.Entry<String, FileConfiguration> entry : infectionConfigs.entrySet()) { ... }
+
+        logger.info(loadedGames.size() + " game(s) are now loaded and enabled.");
     }
 
     public Optional<Game> getGame(String gameId) {
         return Optional.ofNullable(loadedGames.get(gameId));
     }
 
+    public Collection<Game> getAllGames() {
+        return loadedGames.values();
+    }
+
+    public List<String> getKoTHGameIds() {
+        return loadedGames.values().stream()
+                .filter(KoTHGame.class::isInstance)
+                .map(Game::getGameId)
+                .collect(Collectors.toList());
+    }
+
     public boolean addPlayerToGame(Player player, String gameId) {
         if (isPlayerInAnyGame(player)) {
-            player.sendMessage("You are already in a game!");
+            player.sendMessage(ChatColor.RED + "You are already in a game!");
             return false;
         }
         Optional<Game> gameOpt = getGame(gameId);
@@ -69,13 +107,10 @@ public class GameManager implements TerminableModule {
             if (game.addPlayer(player)) {
                 playerCurrentGame.put(player.getUniqueId(), game);
                 return true;
-            } else {
-                // Game-specific reason for not being able to join (e.g., full, already started)
-                // The game.addPlayer() method should send the specific message.
-                return false;
             }
+            return false;
         } else {
-            player.sendMessage("Game '" + gameId + "' not found.");
+            player.sendMessage(ChatColor.RED + "Game '" + gameId + "' not found.");
             return false;
         }
     }
@@ -86,7 +121,6 @@ public class GameManager implements TerminableModule {
             game.removePlayer(player);
             return true;
         }
-        // player.sendMessage("You are not in any game."); // Or handle silently
         return false;
     }
 
@@ -100,22 +134,26 @@ public class GameManager implements TerminableModule {
 
     public void shutdown() {
         logger.info("Shutting down all games...");
-        for (Game game : loadedGames.values()) {
-            game.stop(true); // Force stop all games
-            game.unload();   // Unload resources
+        for (Game game : new ArrayList<>(loadedGames.values())) {
+            try {
+                game.stop(true);
+                game.unload();
+            } catch (Exception e) {
+                logger.severe("Error during shutdown of game " + game.getGameId() + ": " + e.getMessage());
+                e.printStackTrace();
+            }
         }
         loadedGames.clear();
         playerCurrentGame.clear();
+        logger.info("All games have been shut down and player tracking cleared.");
     }
 
-    @Override
-    public void setup(@NotNull TerminableConsumer consumer) {
-        // Listen for player quits to remove them from games automatically
-        Events.subscribe(PlayerQuitEvent.class)
-                .handler(event -> removePlayerFromGame(event.getPlayer()))
-                .bindWith(consumer); // Auto-unregister on plugin disable
-
-        // Potentially load game configurations here when the module is set up
-        loadGamesFromConfig();
+    @EventHandler
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        Player player = event.getPlayer();
+        if (isPlayerInAnyGame(player)) {
+            logger.info("Player " + player.getName() + " quit, removing from their current game.");
+            removePlayerFromGame(player);
+        }
     }
 }

@@ -1,27 +1,29 @@
 package io.mewb.andromedaGames.koth;
 
 import io.mewb.andromedaGames.AndromedaGames;
-import io.mewb.andromedaGames.game.GameState;
 import io.mewb.andromedaGames.game.Game;
-import me.lucko.helper.terminable.composite.CompositeTerminable;
-import me.lucko.helper.Schedulers; // Ensure this is imported
-
-// ... other imports ...
+import io.mewb.andromedaGames.game.GameState;
+import io.mewb.andromedaGames.utils.LocationUtil; // Import LocationUtil
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.World;
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.FileConfiguration; // Import FileConfiguration
 import org.bukkit.entity.Player;
-import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitTask;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-// No need for import java.util.concurrent.TimeUnit; if using Schedulers directly with ticks
+import java.util.logging.Level;
 
 public class KoTHGame extends Game {
 
-    // ... (fields remain the same) ...
+    // Game parameters - to be loaded from config
     private Location hillCenter;
     private int hillRadius;
     private int hillRadiusSquared;
@@ -29,66 +31,175 @@ public class KoTHGame extends Game {
     private int gameDurationSeconds;
     private int timeElapsedSeconds;
     private int minPlayersToStart;
+    private int countdownSeconds;
+    // private int autoStartPlayers; // Optional
 
-    private final Map<UUID, Integer> playerScores;
-    private CompositeTerminable gameTaskTerminable; // Manages tasks specific to this game instance
-
+    // Arena details
+    private String arenaSchematicName;
+    private Location arenaPasteLocation;
     private Location lobbySpawn;
-    private Location gameWorldSpawn;
+    private List<Location> gameSpawns; // Changed to a list for multiple spawn points
     private String worldName;
 
+    private final Map<UUID, Integer> playerScores;
+    private BukkitTask gameTickTask;
+    private BukkitTask countdownTask;
+
+    private FileConfiguration gameConfig; // Store reference to its own config
 
     public KoTHGame(AndromedaGames plugin, String gameId, String arenaId) {
-        super(plugin, gameId, arenaId);
+        super(plugin, gameId, arenaId); // arenaId is now primarily schematic name
         this.playersInGame = new HashSet<>();
         this.playerScores = new HashMap<>();
-        this.gameState = GameState.WAITING;
+        this.gameSpawns = new ArrayList<>();
+        this.gameState = GameState.UNINITIALIZED; // Start as uninitialized until configured
     }
 
-    @Override
-    public void load() {
-        plugin.getLogger().info("Loading KoTH game: " + gameId + " using arena: " + arenaId);
-        // ... (config loading logic) ...
-        this.worldName = plugin.getConfig().getString("koth." + gameId + ".world", "world"); // Example config access
-        // Ensure world is loaded if using Bukkit.getWorld(worldName) directly after.
-        World gameWorld = Bukkit.getWorld(worldName);
-        if (gameWorld == null) {
-            plugin.getLogger().severe("World " + worldName + " not found for KoTH game " + gameId + "!");
+    /**
+     * Configures the game using its specific FileConfiguration.
+     * This is called by GameManager after the config is loaded.
+     * The old load() method's content is moved here.
+     * @param config The FileConfiguration for this game instance.
+     */
+    public void configure(FileConfiguration config) {
+        this.gameConfig = config; // Store for later use (e.g., saving changes)
+        this.logger.info("Configuring KoTH game: " + gameId + " (Arena ID/Schematic: " + arenaId + ")");
+
+        if (!config.getBoolean("enabled", false)) {
+            this.logger.warning("KoTH game '" + gameId + "' is marked as disabled in its config. Aborting configuration.");
             setGameState(GameState.DISABLED);
             return;
         }
 
-        this.hillCenter = new Location(gameWorld, 0, 100, 0); // Placeholder - load from config
-        this.hillRadius = 5; // Placeholder - load from config
-        this.hillRadiusSquared = hillRadius * hillRadius;
-        this.gameDurationSeconds = 300; // Placeholder
-        this.minPlayersToStart = 1; // Placeholder
-        this.lobbySpawn = new Location(gameWorld, 0, 64, 0); // Placeholder
-        this.gameWorldSpawn = new Location(gameWorld, 10, 100, 10); // Placeholder
+        this.worldName = config.getString("world");
+        if (this.worldName == null || this.worldName.isEmpty()) {
+            this.logger.severe("World name not specified for KoTH game '" + gameId + "'. Disabling game.");
+            setGameState(GameState.DISABLED);
+            return;
+        }
 
-        setGameState(GameState.WAITING);
+        World gameWorld = Bukkit.getWorld(worldName);
+        if (gameWorld == null) {
+            this.logger.severe("World '" + worldName + "' not found or not loaded for KoTH game " + gameId + "! Game will be disabled.");
+            setGameState(GameState.DISABLED);
+            return;
+        }
+
+        // Arena settings
+        this.arenaSchematicName = config.getString("arena.schematic_name", this.arenaId); // Fallback to arenaId if not specified
+        ConfigurationSection pasteLocationSection = config.getConfigurationSection("arena.paste_location");
+        this.arenaPasteLocation = LocationUtil.loadLocation(pasteLocationSection, gameWorld, this.logger);
+
+        if (this.arenaSchematicName == null || this.arenaSchematicName.isEmpty()) {
+            this.logger.warning("Arena schematic name not set for game " + gameId + ". Arena will not be loaded by schematic. Ensure it's pre-built.");
+        } else if (this.arenaPasteLocation == null) {
+            this.logger.severe("Arena paste location not configured correctly for game " + gameId + ". Schematic cannot be loaded. Disabling game.");
+            setGameState(GameState.DISABLED);
+            return;
+        } else {
+            // Attempt to load/paste the arena schematic
+            this.logger.info("Attempting to load arena schematic: " + this.arenaSchematicName + " for game " + gameId);
+            boolean pasted = plugin.getArenaManager().pasteSchematic(this.arenaSchematicName, this.arenaPasteLocation);
+            if (!pasted) {
+                this.logger.severe("Failed to paste arena schematic '" + this.arenaSchematicName + "' for game " + gameId + ". Disabling game.");
+                setGameState(GameState.DISABLED);
+                return;
+            }
+            this.logger.info("Arena '" + this.arenaSchematicName + "' loaded successfully for game " + gameId);
+        }
+
+        // KoTH specific settings
+        ConfigurationSection kothSettings = config.getConfigurationSection("koth_settings");
+        if (kothSettings == null) {
+            this.logger.severe("Missing 'koth_settings' section for game '" + gameId + "'. Disabling game.");
+            setGameState(GameState.DISABLED);
+            return;
+        }
+        this.hillCenter = LocationUtil.loadLocation(kothSettings.getConfigurationSection("hill_center"), gameWorld, this.logger);
+        this.hillRadius = kothSettings.getInt("hill_radius", 5);
+        this.hillRadiusSquared = this.hillRadius * this.hillRadius;
+        this.gameDurationSeconds = kothSettings.getInt("game_duration_seconds", 300);
+        this.minPlayersToStart = kothSettings.getInt("min_players_to_start", 2);
+        this.countdownSeconds = kothSettings.getInt("countdown_seconds", 10);
+        // this.autoStartPlayers = kothSettings.getInt("auto_start_players", 0); // Example
+
+        // Spawn points
+        ConfigurationSection spawnsSection = config.getConfigurationSection("spawns");
+        if (spawnsSection == null) {
+            this.logger.severe("Missing 'spawns' section for game '" + gameId + "'. Disabling game.");
+            setGameState(GameState.DISABLED);
+            return;
+        }
+        this.lobbySpawn = LocationUtil.loadLocation(spawnsSection.getConfigurationSection("lobby"), gameWorld, this.logger);
+
+        ConfigurationSection gameAreaSpawnsSection = spawnsSection.getConfigurationSection("game_area");
+        if (gameAreaSpawnsSection != null) {
+            this.gameSpawns = LocationUtil.loadLocationList(gameAreaSpawnsSection, gameWorld, this.logger);
+        }
+
+
+        // Validate critical locations
+        if (this.hillCenter == null) {
+            this.logger.severe("Hill center not configured correctly for " + gameId + ". Disabling game.");
+            setGameState(GameState.DISABLED); return;
+        }
+        if (this.lobbySpawn == null) {
+            this.logger.severe("Lobby spawn not configured correctly for " + gameId + ". Disabling game.");
+            setGameState(GameState.DISABLED); return;
+        }
+        if (this.gameSpawns.isEmpty()) {
+            this.logger.severe("No game area spawn points configured for " + gameId + ". Disabling game.");
+            setGameState(GameState.DISABLED); return;
+        }
+
+        if (this.gameState != GameState.DISABLED) {
+            setGameState(GameState.WAITING);
+            this.logger.info("KoTH game '" + gameId + "' configured and ready. World: " + worldName);
+        }
     }
 
     @Override
-    public void unload() {
-        plugin.getLogger().info("Unloading KoTH game: " + gameId);
-        if (gameTaskTerminable != null && !gameTaskTerminable.isClosed()) {
-            // Use closeAndReportException() to avoid unhandled checked exception
-            // and to automatically log any errors during the closing of tasks.
-            gameTaskTerminable.closeAndReportException();
-            gameTaskTerminable = null; // Good practice to nullify after closing
+    public void load() {
+        if (this.gameState == GameState.UNINITIALIZED) {
+            this.logger.warning("KoTHGame.load() called but game " + gameId + " is still UNINITIALIZED. It should be configured by GameManager.");
+            if (this.gameConfig == null) {
+                FileConfiguration cfg = plugin.getConfigManager().getGameConfig("koth", this.gameId);
+                if (cfg != null) {
+                    this.configure(cfg);
+                } else {
+                    this.logger.severe("Could not retrieve config for " + gameId + " during fallback load(). Disabling.");
+                    setGameState(GameState.DISABLED);
+                }
+            }
         }
-        // ArenaManager.getInstance().resetArena(arenaId);
+    }
+
+
+    @Override
+    public void unload() {
+        this.logger.info("Unloading KoTH game: " + gameId);
+        cancelTasks();
+    }
+
+    private void cancelTasks() {
+        if (countdownTask != null && !countdownTask.isCancelled()) {
+            countdownTask.cancel();
+        }
+        countdownTask = null;
+        if (gameTickTask != null && !gameTickTask.isCancelled()) {
+            gameTickTask.cancel();
+        }
+        gameTickTask = null;
     }
 
     @Override
     public boolean start() {
         if (gameState != GameState.WAITING && gameState != GameState.ENDING) {
-            plugin.getLogger().warning("KoTH game " + gameId + " cannot start, current state: " + gameState);
+            this.logger.warning("KoTH game " + gameId + " cannot start, current state: " + gameState);
             return false;
         }
         if (playersInGame.size() < minPlayersToStart) {
-            broadcastToGamePlayers("Not enough players to start KoTH! Need " + minPlayersToStart + ", have " + playersInGame.size() + ".");
+            broadcastToGamePlayers(ChatColor.RED + "Not enough players to start KoTH! Need " + minPlayersToStart + ", have " + playersInGame.size() + ".");
             return false;
         }
 
@@ -97,105 +208,126 @@ public class KoTHGame extends Game {
         playersInGame.forEach(uuid -> playerScores.put(uuid, 0));
         timeElapsedSeconds = 0;
 
+        int spawnIndex = 0;
         for (UUID uuid : playersInGame) {
             Player player = Bukkit.getPlayer(uuid);
-            if (player != null) {
-                player.teleport(gameWorldSpawn);
-                player.sendMessage("The KoTH game '" + gameId + "' is starting!");
+            if (player != null && player.isOnline()) {
+                if (!gameSpawns.isEmpty()) {
+                    player.teleport(gameSpawns.get(spawnIndex % gameSpawns.size()));
+                    spawnIndex++;
+                } else {
+                    this.logger.warning("No game spawns available for " + gameId + " when starting game!");
+                    player.teleport(lobbySpawn);
+                }
             }
         }
-
-        plugin.getLogger().info("KoTH game " + gameId + " is starting.");
-        setGameState(GameState.ACTIVE);
-
-        // Ensure previous terminable is closed if any lingering (shouldn't happen if flow is correct)
-        if (this.gameTaskTerminable != null && !this.gameTaskTerminable.isClosed()) {
-            this.gameTaskTerminable.closeAndReportException();
-        }
-        this.gameTaskTerminable = CompositeTerminable.create(); // Create a new one for this game session
-
-        Schedulers.sync().runRepeating(() -> {
-                    if (gameState == GameState.ACTIVE) {
-                        gameTick();
-                    }
-                }, 1L, 20L) // Run every second (20 ticks)
-                .bindWith(this.gameTaskTerminable); // Auto-cancels when gameTaskTerminable is closed
-
+        startCountdown();
         return true;
+    }
+
+    private void startCountdown() {
+        cancelTasks();
+        final int[] currentCountdownValue = {countdownSeconds};
+        broadcastToGamePlayers(ChatColor.GREEN + "Game starting in " + ChatColor.YELLOW + currentCountdownValue[0] + ChatColor.GREEN + " seconds!");
+
+        this.countdownTask = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
+            if (gameState != GameState.STARTING) {
+                cancelTasks();
+                return;
+            }
+            currentCountdownValue[0]--;
+            if (currentCountdownValue[0] > 0) {
+                broadcastToGamePlayers(ChatColor.GREEN + "Starting in " + ChatColor.YELLOW + currentCountdownValue[0] + "...");
+            } else {
+                if (countdownTask != null && !countdownTask.isCancelled()) {
+                    countdownTask.cancel();
+                }
+                countdownTask = null;
+                activateGame();
+            }
+        }, 20L, 20L);
+    }
+
+    private void activateGame() {
+        if (gameState != GameState.STARTING) {
+            return;
+        }
+        setGameState(GameState.ACTIVE);
+        broadcastToGamePlayers(ChatColor.GOLD + "KoTH game '" + gameId + "' has started! Capture the hill!");
+        this.logger.info("KoTH game " + gameId + " is now ACTIVE.");
+        this.gameTickTask = plugin.getServer().getScheduler().runTaskTimer(plugin, this::gameTick, 0L, 20L);
     }
 
     @Override
     public void stop(boolean force) {
         if (gameState != GameState.ACTIVE && gameState != GameState.STARTING && !force) {
-            plugin.getLogger().warning("KoTH game " + gameId + " is not active, cannot stop normally.");
-            // If forced, we might still want to attempt cleanup.
             if (!force) return;
         }
-        plugin.getLogger().info("KoTH game " + gameId + " is stopping. Forced: " + force);
-
-        // Important: Change state before closing tasks that might depend on the state.
-        // However, if tasks need to run one last time (e.g. final score calculation), order might differ.
-        // For now, setting state to ENDING first.
+        this.logger.info("KoTH game " + gameId + " is stopping. Forced: " + force);
+        GameState previousState = gameState;
         setGameState(GameState.ENDING);
+        cancelTasks();
 
-        if (this.gameTaskTerminable != null && !this.gameTaskTerminable.isClosed()) {
-            // Use closeAndReportException() here as well.
-            this.gameTaskTerminable.closeAndReportException();
-            this.gameTaskTerminable = null; // Nullify after closing
-        }
-
-        // Announce winner
-        UUID winner = null;
-        int maxScore = -1;
-        // ... (winner announcement logic remains the same) ...
-        for (Map.Entry<UUID, Integer> entry : playerScores.entrySet()) {
-            if (entry.getValue() > maxScore) {
-                maxScore = entry.getValue();
-                winner = entry.getKey();
+        if (previousState == GameState.ACTIVE || (force && !playerScores.isEmpty())) {
+            UUID winnerUUID = null;
+            int maxScore = -1;
+            for (Map.Entry<UUID, Integer> entry : playerScores.entrySet()) {
+                if (entry.getValue() > maxScore) {
+                    maxScore = entry.getValue();
+                    winnerUUID = entry.getKey();
+                }
+            }
+            if (winnerUUID != null) {
+                Player winnerPlayer = Bukkit.getPlayer(winnerUUID);
+                String winnerName = (winnerPlayer != null) ? winnerPlayer.getName() : "An unknown player";
+                broadcastToGamePlayers(ChatColor.GOLD + winnerName + " has won KoTH '" + gameId + "' with " + maxScore + " seconds on the hill!");
+            } else if (!playersInGame.isEmpty()) {
+                broadcastToGamePlayers(ChatColor.YELLOW + "KoTH game '" + gameId + "' ended. No winner could be determined.");
+            } else if (previousState != GameState.WAITING && previousState != GameState.ENDING) {
+                broadcastToGamePlayers(ChatColor.YELLOW + "KoTH game '" + gameId + "' ended as there were no players.");
             }
         }
-
-        if (winner != null) {
-            Player winnerPlayer = Bukkit.getPlayer(winner);
-            String winnerName = (winnerPlayer != null) ? winnerPlayer.getName() : "An unknown player";
-            broadcastToGamePlayers(winnerName + " has won KoTH '" + gameId + "' with " + maxScore + " seconds on the hill!");
-        } else if (!playersInGame.isEmpty()){ // Only say no winner if there were players
-            broadcastToGamePlayers("KoTH game '" + gameId + "' ended. No winner could be determined.");
-        } else {
-            broadcastToGamePlayers("KoTH game '" + gameId + "' ended as there were no players.");
-        }
-
 
         for (UUID uuid : new HashSet<>(playersInGame)) {
             Player player = Bukkit.getPlayer(uuid);
-            if (player != null) {
+            if (player != null && player.isOnline()) {
                 player.teleport(lobbySpawn);
             }
         }
-        // playersInGame.clear(); // Game manager might handle this or a separate reset method
-        // playerScores.clear();
 
-        setGameState(GameState.WAITING); // Or RESETTING then WAITING
+        if (this.arenaSchematicName != null && !this.arenaSchematicName.isEmpty() && this.arenaPasteLocation != null && gameState != GameState.DISABLED) {
+            this.logger.info("Resetting arena for game " + gameId + " by re-pasting schematic: " + this.arenaSchematicName);
+            boolean reset = plugin.getArenaManager().pasteSchematic(this.arenaSchematicName, this.arenaPasteLocation);
+            if (!reset) {
+                this.logger.severe("CRITICAL: Failed to reset arena for game " + gameId + "!");
+            } else {
+                this.logger.info("Arena for " + gameId + " reset successfully.");
+            }
+        }
+        setGameState(GameState.WAITING);
+        this.logger.info("KoTH game " + gameId + " is now WAITING for players.");
     }
-
-    // ... (addPlayer, removePlayer, gameTick, isPlayerOnHill, broadcastToGamePlayers, admin commands, getGameWorld remain largely the same) ...
 
     @Override
     public boolean addPlayer(Player player) {
+        if (gameState == GameState.DISABLED) {
+            player.sendMessage(ChatColor.RED + "KoTH game '" + gameId + "' is currently disabled.");
+            return false;
+        }
         if (gameState != GameState.WAITING && gameState != GameState.STARTING) {
-            player.sendMessage("KoTH game '" + gameId + "' has already started or is ending.");
+            player.sendMessage(ChatColor.RED + "KoTH game '" + gameId + "' has already started or is ending.");
             return false;
         }
         if (playersInGame.contains(player.getUniqueId())) {
-            player.sendMessage("You are already in this KoTH game.");
+            player.sendMessage(ChatColor.YELLOW + "You are already in this KoTH game.");
             return false;
         }
 
         playersInGame.add(player.getUniqueId());
         playerScores.put(player.getUniqueId(), 0);
         player.teleport(lobbySpawn);
-        player.sendMessage("You have joined KoTH game: " + gameId);
-        broadcastToGamePlayers(player.getName() + " has joined the KoTH game! (" + playersInGame.size() + " players)");
+        player.sendMessage(ChatColor.GREEN + "You have joined KoTH game: " + gameId);
+        broadcastToGamePlayers(ChatColor.AQUA + player.getName() + ChatColor.GRAY + " has joined the KoTH game! (" + playersInGame.size() + " players)");
         return true;
     }
 
@@ -205,50 +337,60 @@ public class KoTHGame extends Game {
         playerScores.remove(player.getUniqueId());
 
         if (wasInGame) {
-            player.sendMessage("You have left KoTH game: " + gameId);
-            broadcastToGamePlayers(player.getName() + " has left the KoTH game.");
+            player.sendMessage(ChatColor.GRAY + "You have left KoTH game: " + gameId);
+            broadcastToGamePlayers(ChatColor.AQUA + player.getName() + ChatColor.GRAY + " has left the KoTH game.");
+            if (lobbySpawn != null && (!player.getWorld().equals(lobbySpawn.getWorld()) || player.getLocation().distanceSquared(lobbySpawn) > 100)) {
+                player.teleport(lobbySpawn);
+            }
 
-            if (gameState == GameState.ACTIVE && playersInGame.size() < minPlayersToStart && minPlayersToStart > 1) {
-                broadcastToGamePlayers("Not enough players to continue. Game ending.");
-                stop(false);
-            } else if ((gameState == GameState.ACTIVE || gameState == GameState.STARTING) && playersInGame.isEmpty()) {
-                plugin.getLogger().info("Last player left KoTH game " + gameId + ". Stopping.");
-                stop(false); // Stop the game if no players are left and it was active/starting
+            if ((gameState == GameState.ACTIVE || gameState == GameState.STARTING)) {
+                if (playersInGame.isEmpty() && minPlayersToStart > 0) {
+                    broadcastToGamePlayers(ChatColor.YELLOW + "The last player left. Game ending.");
+                    stop(false);
+                } else if (playersInGame.size() < minPlayersToStart && minPlayersToStart > 1) {
+                    broadcastToGamePlayers(ChatColor.RED + "Not enough players to continue. Game ending.");
+                    stop(false);
+                }
             }
         }
     }
 
     @Override
     protected void gameTick() {
+        if (gameState != GameState.ACTIVE) {
+            if (gameTickTask != null && !gameTickTask.isCancelled()){
+                gameTickTask.cancel();
+            }
+            gameTickTask = null;
+            return;
+        }
         timeElapsedSeconds++;
-
         if (timeElapsedSeconds >= gameDurationSeconds) {
-            broadcastToGamePlayers("Time's up!");
+            broadcastToGamePlayers(ChatColor.GOLD + "Time's up!");
             stop(false);
             return;
         }
-
         for (UUID uuid : playersInGame) {
             Player player = Bukkit.getPlayer(uuid);
-            if (player != null && player.isOnline() && player.getWorld().equals(hillCenter.getWorld())) {
+            if (player != null && player.isOnline()) {
                 if (isPlayerOnHill(player)) {
                     int currentScore = playerScores.getOrDefault(uuid, 0);
                     playerScores.put(uuid, currentScore + 1);
                 }
             }
         }
-
-        if (timeElapsedSeconds % 30 == 0) {
-            broadcastToGamePlayers("KoTH: " + (gameDurationSeconds - timeElapsedSeconds) + "s remaining.");
+        if (timeElapsedSeconds > 0 && timeElapsedSeconds % 30 == 0) {
+            int timeRemaining = gameDurationSeconds - timeElapsedSeconds;
+            broadcastToGamePlayers(ChatColor.YELLOW + "KoTH: " + ChatColor.AQUA + timeRemaining + "s" + ChatColor.YELLOW + " remaining.");
         }
     }
 
     private boolean isPlayerOnHill(Player player) {
-        // Ensure world check is already done by caller or here
-        if (!player.getWorld().equals(hillCenter.getWorld())) return false;
-
+        if (hillCenter == null || !player.getWorld().equals(hillCenter.getWorld())) {
+            return false;
+        }
         Location playerFootLoc = player.getLocation();
-        if (Math.abs(playerFootLoc.getY() - hillCenter.getY()) <= 1.5) { // Y-level check
+        if (Math.abs(playerFootLoc.getY() - hillCenter.getY()) <= 1.5) {
             double dx = playerFootLoc.getX() - hillCenter.getX();
             double dz = playerFootLoc.getZ() - hillCenter.getZ();
             return (dx * dx + dz * dz) <= hillRadiusSquared;
@@ -257,35 +399,53 @@ public class KoTHGame extends Game {
     }
 
     public void broadcastToGamePlayers(String message) {
+        String prefix = ChatColor.DARK_AQUA + "[KoTH-" + gameId + "] " + ChatColor.RESET;
         for (UUID uuid : playersInGame) {
             Player p = Bukkit.getPlayer(uuid);
-            if (p != null) {
-                p.sendMessage("[KoTH-" + gameId + "] " + message);
+            if (p != null && p.isOnline()) {
+                p.sendMessage(prefix + message);
             }
         }
     }
 
     public void setHillLocation(Location location) {
-        this.hillCenter = location;
-        // TODO: Save to config
-        plugin.getLogger().info("KoTH '" + gameId + "' hill center set to: " + location.toString());
+        if (location == null || gameConfig == null) return;
+        this.hillCenter = location.clone();
+
+        ConfigurationSection hillSection = gameConfig.getConfigurationSection("koth_settings.hill_center");
+        if (hillSection == null) {
+            hillSection = gameConfig.createSection("koth_settings.hill_center");
+        }
+        LocationUtil.saveLocation(hillSection, this.hillCenter, false);
+        plugin.getConfigManager().saveGameConfig("koth", this.gameId, gameConfig);
+
+        this.logger.info("KoTH '" + gameId + "' hill center administratively set and saved to: " + location.toString());
+        broadcastToGamePlayers(ChatColor.YELLOW + "Admin: Hill location has been updated.");
     }
 
     public void setHillRadius(int radius) {
+        if (radius <= 0 || gameConfig == null) return;
         this.hillRadius = radius;
         this.hillRadiusSquared = radius * radius;
-        // TODO: Save to config
-        plugin.getLogger().info("KoTH '" + gameId + "' hill radius set to: " + radius);
+
+        gameConfig.set("koth_settings.hill_radius", radius);
+        plugin.getConfigManager().saveGameConfig("koth", this.gameId, gameConfig);
+
+        this.logger.info("KoTH '" + gameId + "' hill radius administratively set and saved to: " + radius);
+        broadcastToGamePlayers(ChatColor.YELLOW + "Admin: Hill radius has been updated to " + radius + ".");
     }
 
     @Override
     public World getGameWorld() {
-        if (hillCenter != null && hillCenter.getWorld() != null) {
-            return hillCenter.getWorld();
+        if (this.arenaPasteLocation != null && this.arenaPasteLocation.getWorld() != null) {
+            return this.arenaPasteLocation.getWorld();
+        }
+        if (this.hillCenter != null && this.hillCenter.getWorld() != null) {
+            return this.hillCenter.getWorld();
         }
         World foundWorld = Bukkit.getWorld(worldName);
-        if (foundWorld == null) {
-            plugin.getLogger().warning("getGameWorld() called for KoTH " + gameId + " but world '" + worldName + "' is not loaded!");
+        if (foundWorld == null && gameState != GameState.DISABLED) {
+            this.logger.log(Level.WARNING, "getGameWorld() called for KoTH " + gameId + " but world '" + worldName + "' is not loaded!");
         }
         return foundWorld;
     }

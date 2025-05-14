@@ -6,32 +6,33 @@ import org.bukkit.entity.Player;
 
 import java.util.Set;
 import java.util.UUID;
+import java.util.logging.Logger; // Ensure Logger is imported
 
 public abstract class Game {
 
     protected final AndromedaGames plugin;
-    protected final String gameId; // Unique identifier for this game instance (e.g., "koth_main", "infection_lab")
-    protected final String arenaId; // Identifier for the arena this game uses
+    protected final Logger logger; // Logger is declared here
+    protected final String gameId;
+    protected final String arenaId;
     protected GameState gameState;
-    protected Set<UUID> playersInGame; // Players currently participating
+    protected Set<UUID> playersInGame;
 
     public Game(AndromedaGames plugin, String gameId, String arenaId) {
         this.plugin = plugin;
+        this.logger = plugin.getLogger(); // Logger is initialized here from the main plugin instance
         this.gameId = gameId;
         this.arenaId = arenaId;
-        this.gameState = GameState.WAITING; // Default state
+        this.gameState = GameState.WAITING;
     }
 
-    // --- Abstract methods to be implemented by each game type ---
-    public abstract void load(); // Load configurations, arena, etc.
-    public abstract void unload(); // Clean up resources
-    public abstract boolean start(); // Start the game
-    public abstract void stop(boolean force); // Stop the game (force for immediate shutdown)
-    public abstract boolean addPlayer(Player player); // Add player to the game
-    public abstract void removePlayer(Player player); // Remove player from the game
-    protected abstract void gameTick(); // Called periodically if the game is active
+    public abstract void load();
+    public abstract void unload();
+    public abstract boolean start();
+    public abstract void stop(boolean force);
+    public abstract boolean addPlayer(Player player);
+    public abstract void removePlayer(Player player);
+    protected abstract void gameTick();
 
-    // --- Common methods ---
     public String getGameId() {
         return gameId;
     }
@@ -44,28 +45,37 @@ public abstract class Game {
         return gameState;
     }
 
-    public void setGameState(GameState gameState) {
-        this.plugin.getLogger().info("[" + gameId + "] Changing state from " + this.gameState + " to " + gameState);
-        this.gameState = gameState;
-        // Potentially broadcast state changes or handle logic based on state change
+    public void setGameState(GameState newGameState) {
+        if (this.gameState != newGameState) {
+            // Use the initialized logger instance
+            this.logger.info("[" + gameId + "] State changing from " + this.gameState + " to " + newGameState);
+            this.gameState = newGameState;
+        }
     }
 
     public boolean isPlayerInGame(Player player) {
         return playersInGame.contains(player.getUniqueId());
     }
 
+    public boolean isPlayerInGame(UUID playerUuid) {
+        return playersInGame.contains(playerUuid);
+    }
+
     public int getPlayerCount() {
         return playersInGame.size();
     }
 
-    // Optional: Get the world the game is primarily played in
-    // This might be more complex if arenas can span worlds or are world-specific
     public abstract World getGameWorld();
 
-    // To be called by a scheduler
     public final void tick() {
         if (gameState == GameState.ACTIVE) {
-            gameTick();
+            try {
+                gameTick();
+            } catch (Exception e) {
+                // Use the initialized logger instance
+                this.logger.severe("Exception during gameTick for " + gameId + ": " + e.getMessage());
+                e.printStackTrace();
+            }
         }
     }
 }

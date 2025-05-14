@@ -1,77 +1,81 @@
 package io.mewb.andromedaGames;
 
+import io.mewb.andromedaGames.arena.ArenaManager;
 import io.mewb.andromedaGames.command.AndromedaGamesCommand;
 import io.mewb.andromedaGames.command.KoTHCommand;
+import io.mewb.andromedaGames.config.ConfigManager; // Import ConfigManager
 import io.mewb.andromedaGames.game.GameManager;
-import me.lucko.helper.plugin.ExtendedJavaPlugin;
-// No need to import CompositeTerminable here unless you are creating new instances of it
-// in *this* class, which we aren't for the main plugin-level one.
+import org.bukkit.plugin.java.JavaPlugin;
 
-import org.bukkit.Bukkit; // Keep this if used, e.g. for Bukkit.getServer() implicitly by getLogger() etc.
-
-public class AndromedaGames extends ExtendedJavaPlugin {
+public class AndromedaGames extends JavaPlugin {
 
     private static AndromedaGames instance;
     private GameManager gameManager;
     private FAWEProvider faweProvider;
-
-    // The main CompositeTerminable is managed privately by ExtendedJavaPlugin.
-    // We interact with it via bind(), bindModule(), or by passing 'this' (as a TerminableConsumer).
+    private ArenaManager arenaManager;
+    private ConfigManager configManager; // Add ConfigManager instance
 
     @Override
-    protected void enable() {
+    public void onEnable() {
         instance = this;
 
+        // Initialize FAWE Provider first as ArenaManager depends on it
         if (!checkForFAWE()) {
             getLogger().severe("FastAsyncWorldEdit (FAWE) not found! AndromedaGames will not enable.");
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
         this.faweProvider = new FAWEProvider();
+        getLogger().info("FAWE Provider initialized.");
+
+        // Initialize Arena Manager
+        this.arenaManager = new ArenaManager(this);
+        getLogger().info("ArenaManager initialized.");
+
+        // Initialize Config Manager
+        this.configManager = new ConfigManager(this); // Instantiate ConfigManager
+        getLogger().info("ConfigManager initialized.");
+
+        // Initialize Game Manager - GameManager will use ConfigManager
+        this.gameManager = new GameManager(this);
+        this.gameManager.initialize(); // This now registers events and loads game configs via ConfigManager
+        getLogger().info("GameManager initialized.");
+
+        // Load main plugin configuration (config.yml) if needed for global settings
+        saveDefaultConfig(); // Saves a default config.yml if one doesn't exist
+        // reloadConfig(); // Load the config
 
         getLogger().info("AndromedaGames is enabling!");
 
-        this.gameManager = new GameManager(this);
-        // GameManager implements TerminableModule. Its setup method will be called,
-        // and it will be registered with the plugin's main CompositeTerminable.
-        bindModule(this.gameManager);
+        // Register Commands using Bukkit API
+        AndromedaGamesCommand agCommandExecutor = new AndromedaGamesCommand(this);
+        if (this.getCommand("andromedagames") != null) {
+            this.getCommand("andromedagames").setExecutor(agCommandExecutor);
+            this.getCommand("andromedagames").setTabCompleter(agCommandExecutor);
+            getLogger().info("Registered 'andromedagames' command.");
+        } else {
+            getLogger().severe("Could not register 'andromedagames' command! Check plugin.yml.");
+        }
 
-        // Load Configurations (if not handled by GameManager's setup or other modules)
-        // loadMainConfig();
 
-        // Register Commands
-        // These command classes, if they implement TerminableModule (or just Command from Helper),
-        // will also be managed by the plugin's lifecycle when bound this way.
-        bindModule(new AndromedaGamesCommand(this));
-        bindModule(new KoTHCommand(this, this.gameManager)); // Pass the already created gameManager
-
-        // Register any other listeners or schedulers directly tied to the plugin's lifecycle
-        // Example:
-        // Events.subscribe(SomeGlobalEvent.class)
-        //       .handler(e -> { /* handle event */ })
-        //       .bindWith(this); // 'this' is the TerminableConsumer
+        KoTHCommand kothCommandExecutor = new KoTHCommand(this, this.gameManager);
+        if (this.getCommand("koth") != null) {
+            this.getCommand("koth").setExecutor(kothCommandExecutor);
+            this.getCommand("koth").setTabCompleter(kothCommandExecutor);
+            getLogger().info("Registered 'koth' command.");
+        } else {
+            getLogger().severe("Could not register 'koth' command! Check plugin.yml.");
+        }
 
         getLogger().info("AndromedaGames has been enabled successfully!");
     }
 
     @Override
-    protected void disable() {
+    public void onDisable() {
         getLogger().info("AndromedaGames is disabling!");
 
-        // All resources registered via bind(), bindModule(), or .bindWith(this)
-        // will be automatically closed/terminated by ExtendedJavaPlugin's onDisable sequence.
-
-        // If GameManager needs an explicit shutdown call for logic not covered by TerminableModule.close(),
-        // it could be placed here. However, the ideal is that GameManager.close() handles all its cleanup.
-        // Our current GameManager.shutdown() is called from its own TerminableModule.close() if we design it that way,
-        // or explicitly if needed. For now, GameManager's PlayerQuitEvent listener is bound via its setup method,
-        // which is tied to the plugin's lifecycle. The gameManager.shutdown() call is more for active game states.
-        // Let's ensure GameManager's shutdown is robust.
         if (gameManager != null) {
-            // This explicit shutdown might be redundant if GameManager.close() handles it,
-            // but can be kept for clarity for now if it performs actions beyond
-            // what its 'close' (from Terminable/AutoCloseable) might do.
-            gameManager.shutdown();
+            gameManager.shutdown(); // Shuts down all active games
         }
 
         instance = null;
@@ -80,12 +84,15 @@ public class AndromedaGames extends ExtendedJavaPlugin {
 
     private boolean checkForFAWE() {
         if (getServer().getPluginManager().getPlugin("FastAsyncWorldEdit") == null) {
+            getLogger().severe("FastAsyncWorldEdit plugin not found.");
             return false;
         }
         try {
             Class.forName("com.sk89q.worldedit.bukkit.FastAsyncWorldEditPlugin");
+            getLogger().info("FastAsyncWorldEdit found and accessible.");
             return true;
         } catch (ClassNotFoundException e) {
+            getLogger().severe("FastAsyncWorldEdit class not found, even though plugin is present. Check FAWE installation.");
             return false;
         }
     }
@@ -103,22 +110,30 @@ public class AndromedaGames extends ExtendedJavaPlugin {
         return faweProvider;
     }
 
-    // The problematic getPluginTerminableModule() method has been removed.
-    // If a class needs to bind to the plugin's lifecycle, it should accept
-    // the AndromedaGames instance (as a TerminableConsumer) or use Helper's
-    // static methods if appropriate and then .bindWith(pluginInstance).
+    public ArenaManager getArenaManager() {
+        return arenaManager;
+    }
 
-    // --- Utility for FAWE ---
+    public ConfigManager getConfigManager() { // Getter for ConfigManager
+        return configManager;
+    }
+
     public static class FAWEProvider {
         private com.sk89q.worldedit.WorldEdit fawe;
 
         public FAWEProvider() {
-            // This is a common way to get the FAWE API instance
-            // Ensure FAWE is loaded before this is called (which checkForFAWE() does)
-            this.fawe = com.sk89q.worldedit.WorldEdit.getInstance();
+            try {
+                this.fawe = com.sk89q.worldedit.WorldEdit.getInstance();
+            } catch (Exception e) {
+                AndromedaGames.getInstance().getLogger().severe("Failed to get FAWE instance from FAWEProvider: " + e.getMessage());
+                this.fawe = null;
+            }
         }
 
         public com.sk89q.worldedit.WorldEdit getFAWE() {
+            if (this.fawe == null) {
+                AndromedaGames.getInstance().getLogger().severe("FAWE API instance is null in FAWEProvider.getFAWE(). FAWE might not be loaded correctly.");
+            }
             return this.fawe;
         }
     }
