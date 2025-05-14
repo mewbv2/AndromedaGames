@@ -48,14 +48,14 @@ public class KoTHCommand implements CommandExecutor, TabCompleter {
                 return handleLeave(sender, subArgs);
             case "list":
                 return handleList(sender, subArgs);
-            case "start":
-                return handleStart(sender, subArgs);
+            case "start": // Admin start command
+                return handleAdminStart(sender, subArgs);
             case "stop":
-                return handleStop(sender, subArgs);
+                return handleAdminStop(sender, subArgs);
             case "sethill":
-                return handleSetHill(sender, subArgs);
+                return handleAdminSetHill(sender, subArgs);
             case "setradius":
-                return handleSetRadius(sender, subArgs);
+                return handleAdminSetRadius(sender, subArgs);
             default:
                 sender.sendMessage(ChatColor.RED + "Unknown KoTH subcommand: " + ChatColor.YELLOW + subCommand);
                 sendBaseKoTHHelp(sender);
@@ -66,20 +66,22 @@ public class KoTHCommand implements CommandExecutor, TabCompleter {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         final List<String> completions = new ArrayList<>();
+        List<String> subcommands = new ArrayList<>(Arrays.asList("join", "leave", "list"));
+        if (sender.hasPermission("andromedagames.admin.koth.manage")) {
+            subcommands.addAll(Arrays.asList("start", "stop", "sethill", "setradius"));
+        }
+
         if (args.length == 1) {
-            StringUtil.copyPartialMatches(args[0],
-                    Arrays.asList("join", "leave", "list", "start", "stop", "sethill", "setradius"),
-                    completions);
+            StringUtil.copyPartialMatches(args[0], subcommands, completions);
         } else if (args.length >= 2) {
             String subCommand = args[0].toLowerCase();
-            if (subCommand.equals("join") || subCommand.equals("start") || subCommand.equals("stop") ||
-                    subCommand.equals("sethill") || subCommand.equals("setradius")) {
-                if (args.length == 2) { // Expecting gameId
+            if (Arrays.asList("join", "start", "stop", "sethill", "setradius").contains(subCommand)) {
+                if (args.length == 2) {
                     StringUtil.copyPartialMatches(args[1], gameManager.getKoTHGameIds(), completions);
                 }
             }
-            if (subCommand.equals("setradius") && args.length == 3) { // Expecting radius number
-                StringUtil.copyPartialMatches(args[2], Arrays.asList("5", "10", "15"), completions);
+            if (subCommand.equals("setradius") && args.length == 3) {
+                StringUtil.copyPartialMatches(args[2], Arrays.asList("3", "5", "7", "10", "15"), completions);
             }
         }
         Collections.sort(completions);
@@ -87,14 +89,18 @@ public class KoTHCommand implements CommandExecutor, TabCompleter {
     }
 
     private void sendBaseKoTHHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.GOLD + "--- KoTH Commands ---");
-        sender.sendMessage(ChatColor.YELLOW + "/koth join <gameId>" + ChatColor.GRAY + " - Joins a KoTH game.");
-        sender.sendMessage(ChatColor.YELLOW + "/koth leave" + ChatColor.GRAY + " - Leaves your current game.");
+        sender.sendMessage(ChatColor.GOLD + "--- King of the Hill (KoTH) Commands ---");
+        if (sender.hasPermission("andromedagames.player.koth.join")) {
+            sender.sendMessage(ChatColor.YELLOW + "/koth join <gameId>" + ChatColor.GRAY + " - Joins a KoTH game.");
+        }
+        if (sender.hasPermission("andromedagames.player.koth.leave")) {
+            sender.sendMessage(ChatColor.YELLOW + "/koth leave" + ChatColor.GRAY + " - Leaves your current KoTH game.");
+        }
         sender.sendMessage(ChatColor.YELLOW + "/koth list" + ChatColor.GRAY + " - Lists available KoTH games.");
-        if (sender.hasPermission("andromedagames.admin.koth.manage")) { // Example broader admin perm
-            sender.sendMessage(ChatColor.RED + "Admin Commands:");
-            sender.sendMessage(ChatColor.YELLOW + "/koth start <gameId>" + ChatColor.GRAY + " - Force starts a game.");
-            sender.sendMessage(ChatColor.YELLOW + "/koth stop <gameId>" + ChatColor.GRAY + " - Force stops a game.");
+        if (sender.hasPermission("andromedagames.admin.koth.manage")) {
+            sender.sendMessage(ChatColor.RED + "Admin KoTH Commands:");
+            sender.sendMessage(ChatColor.YELLOW + "/koth start <gameId>" + ChatColor.GRAY + " - Force starts a KoTH game (allows solo).");
+            sender.sendMessage(ChatColor.YELLOW + "/koth stop <gameId>" + ChatColor.GRAY + " - Force stops a KoTH game.");
             sender.sendMessage(ChatColor.YELLOW + "/koth sethill <gameId>" + ChatColor.GRAY + " - Sets hill center (player only).");
             sender.sendMessage(ChatColor.YELLOW + "/koth setradius <gameId> <radius>" + ChatColor.GRAY + " - Sets hill radius.");
         }
@@ -115,21 +121,16 @@ public class KoTHCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         String gameId = args[0];
-
         if (gameManager.isPlayerInAnyGame(player)) {
-            player.sendMessage(ChatColor.RED + "You are already in a game. Type /koth leave first.");
+            player.sendMessage(ChatColor.RED + "You are already in a game. Type " + ChatColor.YELLOW + "/koth leave" + ChatColor.RED + " first.");
             return true;
         }
-
         Optional<Game> gameOpt = gameManager.getGame(gameId);
         if (gameOpt.isPresent() && gameOpt.get() instanceof KoTHGame) {
             KoTHGame kothGame = (KoTHGame) gameOpt.get();
-            if (!kothGame.addPlayer(player)) {
-                // Failure message sent by KoTHGame.addPlayer() or if it returns false without msg:
-                // player.sendMessage(ChatColor.RED + "Could not join game '" + gameId + "'. It might be full or already started.");
-            }
+            kothGame.addPlayer(player); // Messages handled by addPlayer
         } else {
-            player.sendMessage(ChatColor.RED + "KoTH game '" + gameId + "' not found.");
+            player.sendMessage(ChatColor.RED + "KoTH game '" + gameId + "' not found or is not a KoTH game type.");
         }
         return true;
     }
@@ -141,7 +142,7 @@ public class KoTHCommand implements CommandExecutor, TabCompleter {
         }
         Player player = (Player) sender;
         if (!player.hasPermission("andromedagames.player.koth.leave")) {
-            player.sendMessage(ChatColor.RED + "You do not have permission to leave games.");
+            player.sendMessage(ChatColor.RED + "You do not have permission to leave KoTH games.");
             return true;
         }
         if (!gameManager.removePlayerFromGame(player)) {
@@ -155,9 +156,8 @@ public class KoTHCommand implements CommandExecutor, TabCompleter {
                 .filter(KoTHGame.class::isInstance)
                 .map(KoTHGame.class::cast)
                 .collect(Collectors.toList());
-
         if (kothGames.isEmpty()) {
-            sender.sendMessage(ChatColor.YELLOW + "No KoTH games are currently available.");
+            sender.sendMessage(ChatColor.YELLOW + "No KoTH games are currently available or defined.");
             return true;
         }
         sender.sendMessage(ChatColor.GOLD + "--- Available KoTH Games ---");
@@ -170,9 +170,9 @@ public class KoTHCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
-    private boolean handleStart(CommandSender sender, String[] args) {
-        if (!sender.hasPermission("andromedagames.admin.koth.forcestart")) {
-            sender.sendMessage(ChatColor.RED + "You do not have permission to force start games.");
+    private boolean handleAdminStart(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("andromedagames.admin.koth.start")) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to force start KoTH games.");
             return true;
         }
         if (args.length < 1) {
@@ -181,17 +181,17 @@ public class KoTHCommand implements CommandExecutor, TabCompleter {
         }
         String gameId = args[0];
         Optional<Game> gameOpt = gameManager.getGame(gameId);
-
         if (gameOpt.isPresent() && gameOpt.get() instanceof KoTHGame) {
             KoTHGame kothGame = (KoTHGame) gameOpt.get();
             if (kothGame.getGameState() == GameState.WAITING || kothGame.getGameState() == GameState.ENDING) {
-                if (kothGame.start()) {
-                    sender.sendMessage(ChatColor.GREEN + "KoTH game '" + gameId + "' has been force-started.");
+                // Call the new start method, bypassing player check for admins
+                if (kothGame.start(true)) {
+                    sender.sendMessage(ChatColor.GREEN + "KoTH game '" + gameId + "' has been force-started (bypassing player check).");
                 } else {
-                    sender.sendMessage(ChatColor.RED + "Could not start KoTH game '" + gameId + "'. Check player count or console.");
+                    sender.sendMessage(ChatColor.RED + "Could not start KoTH game '" + gameId + "'. Check console for details.");
                 }
             } else {
-                sender.sendMessage(ChatColor.RED + "KoTH game '" + gameId + "' is already active or starting.");
+                sender.sendMessage(ChatColor.RED + "KoTH game '" + gameId + "' is already " + kothGame.getGameState().name().toLowerCase() + " or cannot be started from this state.");
             }
         } else {
             sender.sendMessage(ChatColor.RED + "KoTH game '" + gameId + "' not found.");
@@ -199,9 +199,9 @@ public class KoTHCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
-    private boolean handleStop(CommandSender sender, String[] args) {
-        if (!sender.hasPermission("andromedagames.admin.koth.forcestop")) {
-            sender.sendMessage(ChatColor.RED + "You do not have permission to force stop games.");
+    private boolean handleAdminStop(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("andromedagames.admin.koth.stop")) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to force stop KoTH games.");
             return true;
         }
         if (args.length < 1) {
@@ -210,14 +210,13 @@ public class KoTHCommand implements CommandExecutor, TabCompleter {
         }
         String gameId = args[0];
         Optional<Game> gameOpt = gameManager.getGame(gameId);
-
         if (gameOpt.isPresent() && gameOpt.get() instanceof KoTHGame) {
             KoTHGame kothGame = (KoTHGame) gameOpt.get();
             if (kothGame.getGameState() == GameState.ACTIVE || kothGame.getGameState() == GameState.STARTING) {
                 kothGame.stop(true); // Force stop
                 sender.sendMessage(ChatColor.GREEN + "KoTH game '" + gameId + "' has been force-stopped.");
             } else {
-                sender.sendMessage(ChatColor.RED + "KoTH game '" + gameId + "' is not currently running.");
+                sender.sendMessage(ChatColor.RED + "KoTH game '" + gameId + "' is not currently running or starting. Current state: " + kothGame.getGameState().name());
             }
         } else {
             sender.sendMessage(ChatColor.RED + "KoTH game '" + gameId + "' not found.");
@@ -225,7 +224,7 @@ public class KoTHCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
-    private boolean handleSetHill(CommandSender sender, String[] args) {
+    private boolean handleAdminSetHill(CommandSender sender, String[] args) {
         if (!(sender instanceof Player)) {
             sender.sendMessage(ChatColor.RED + "This command can only be run by a player.");
             return true;
@@ -241,21 +240,21 @@ public class KoTHCommand implements CommandExecutor, TabCompleter {
         }
         String gameId = args[0];
         Optional<Game> gameOpt = gameManager.getGame(gameId);
-
         if (gameOpt.isPresent() && gameOpt.get() instanceof KoTHGame) {
             KoTHGame kothGame = (KoTHGame) gameOpt.get();
             Location newHillCenter = player.getLocation();
             kothGame.setHillLocation(newHillCenter);
-            player.sendMessage(String.format("%sHill center for KoTH game '%s' set to your current location (%.1f, %.1f, %.1f in %s).",
-                    ChatColor.GREEN, gameId, newHillCenter.getX(), newHillCenter.getY(), newHillCenter.getZ(), newHillCenter.getWorld().getName()));
-            player.sendMessage(ChatColor.YELLOW + "Remember to save this to configuration for persistence!");
+            player.sendMessage(String.format("%sHill center for KoTH game '%s%s%s' set to (%.1f, %.1f, %.1f in %s).",
+                    ChatColor.GREEN, ChatColor.AQUA, gameId, ChatColor.GREEN,
+                    newHillCenter.getX(), newHillCenter.getY(), newHillCenter.getZ(), newHillCenter.getWorld().getName()));
+            player.sendMessage(ChatColor.YELLOW + "Configuration saved.");
         } else {
             player.sendMessage(ChatColor.RED + "KoTH game '" + gameId + "' not found.");
         }
         return true;
     }
 
-    private boolean handleSetRadius(CommandSender sender, String[] args) {
+    private boolean handleAdminSetRadius(CommandSender sender, String[] args) {
         if (!sender.hasPermission("andromedagames.admin.koth.setradius")) {
             sender.sendMessage(ChatColor.RED + "You do not have permission to set the hill radius.");
             return true;
@@ -269,21 +268,21 @@ public class KoTHCommand implements CommandExecutor, TabCompleter {
         try {
             radius = Integer.parseInt(args[1]);
         } catch (NumberFormatException e) {
-            sender.sendMessage(ChatColor.RED + "Invalid radius: '" + args[1] + "'. Must be a number.");
+            sender.sendMessage(ChatColor.RED + "Invalid radius: '" + args[1] + "'. Must be a whole number.");
             return true;
         }
-
         if (radius <= 0) {
-            sender.sendMessage(ChatColor.RED + "Radius must be a positive integer.");
+            sender.sendMessage(ChatColor.RED + "Radius must be a positive integer > 0.");
             return true;
         }
-
         Optional<Game> gameOpt = gameManager.getGame(gameId);
         if (gameOpt.isPresent() && gameOpt.get() instanceof KoTHGame) {
             KoTHGame kothGame = (KoTHGame) gameOpt.get();
             kothGame.setHillRadius(radius);
-            sender.sendMessage(String.format("%sHill radius for KoTH game '%s' set to %d.", ChatColor.GREEN, gameId, radius));
-            sender.sendMessage(ChatColor.YELLOW + "Remember to save this to configuration for persistence!");
+            sender.sendMessage(String.format("%sHill radius for KoTH game '%s%s%s' set to %s%d%s.",
+                    ChatColor.GREEN, ChatColor.AQUA, gameId, ChatColor.GREEN,
+                    ChatColor.YELLOW, radius, ChatColor.GREEN));
+            sender.sendMessage(ChatColor.YELLOW + "Configuration saved.");
         } else {
             sender.sendMessage(ChatColor.RED + "KoTH game '" + gameId + "' not found.");
         }

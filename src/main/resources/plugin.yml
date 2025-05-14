@@ -1,4 +1,57 @@
 name: AndromedaGames
-version: '1.0-SNAPSHOT'
+version: 0.2.1 # Incremented version slightly
 main: io.mewb.andromedaGames.AndromedaGames
-api-version: '1.21'
+api-version: 1.19 # Or your target server version
+author: YourName # Or Mewb
+description: A collection of fun mini-games!
+depend: [FastAsyncWorldEdit] # FAWE is a hard dependency
+
+commands:
+  andromedagames:
+    description: Main command for AndromedaGames plugin.
+    aliases: [ag, andromeda]
+    permission: andromedagames.admin
+    usage: /<command> <subcommand> [args...]
+  koth:
+    description: Commands for King of the Hill.
+    aliases: [kingofthehill]
+    usage: /<command> <subcommand> [args...]
+    # Permissions for subcommands are checked within the KoTHCommand executor
+  vote:
+    description: Casts your vote during a game event.
+    aliases: [gamevote]
+    usage: /<command> <option_number>
+    permission: andromedagames.player.vote # Permission to use the vote command
+
+permissions:
+  andromedagames.admin:
+    description: Allows access to all AndromedaGames admin commands.
+    default: op
+  andromedagames.admin.arena.save:
+    description: Allows saving of arena schematics using /ag savearena.
+    default: op
+  andromedagames.admin.koth.manage: # Broad permission for KoTH admin subcommands
+    description: Allows access to KoTH administrative commands like start, stop, sethill, setradius.
+    default: op
+  andromedagames.admin.koth.start:
+    description: Allows force-starting a KoTH game.
+    default: op
+  andromedagames.admin.koth.stop:
+    description: Allows force-stopping a KoTH game.
+    default: op
+  andromedagames.admin.koth.sethill:
+    description: Allows setting the hill location for a KoTH game.
+    default: op
+  andromedagames.admin.koth.setradius:
+    description: Allows setting the hill radius for a KoTH game.
+    default: op
+
+  andromedagames.player.koth.join:
+    description: Allows a player to join a KoTH game.
+    default: true
+  andromedagames.player.koth.leave:
+    description: Allows a player to leave a KoTH game.
+    default: true
+  andromedagames.player.vote:
+    description: Allows a player to cast a vote during mini-game events.
+    default: true

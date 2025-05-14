@@ -1,0 +1,29 @@
+# AndromedaGames Main Configuration File
+
+# Configuration version - useful for handling config updates in future plugin versions.
+config_version: 1.0
+
+# Enable debug logging throughout the plugin.
+# When true, more detailed information might be printed to the console,
+# which can be helpful for development and troubleshooting.
+debug_mode: false
+
+# Global settings for all games (can be overridden by specific game configs)
+# For example, you could define global default messages here, though we haven't implemented that yet.
+# global_settings:
+#   default_join_message: "&e%player% has joined the arena!"
+#   default_leave_message: "&e%player% has left the arena!"
+
+# Placeholder for any other global plugin settings you might need in the future.
+# For example, settings related to a global lobby if you implement one,
+# or database connection details if you add stats tracking.
+
+# Example of how you might reference the default KoTH game ID from GameManager's loadGamesFromConfig
+# This is not strictly needed if GameManager just loads all files, but shows how config.yml can be used.
+# default_koth:
+#   id: "mountain_king"
+#   arena_id: "koth_arena_1" # This was an older way, now arenaId is more tied to schematic_name in game files
+
+# Note: Most game-specific settings (like arena details, KOTH rules, spawn points)
+# are defined in individual files within the 'plugins/AndromedaGames/games/<game_type>/' directory.
+# This main config.yml is for settings that apply to the AndromedaGames plugin as a whole.

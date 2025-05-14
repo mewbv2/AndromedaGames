@@ -1,8 +1,10 @@
 package io.mewb.andromedaGames.utils;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.FileConfiguration;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -22,7 +24,8 @@ public class LocationUtil {
      */
     public static Location loadLocation(ConfigurationSection section, World world, Logger logger) {
         if (section == null) {
-            logger.warning("Cannot load location: configuration section is null.");
+            // Logger call is removed here as the caller should log if the section itself is missing.
+            // This method expects a non-null section representing the location's data.
             return null;
         }
         if (world == null) {
@@ -35,89 +38,99 @@ public class LocationUtil {
             return null;
         }
 
-        double x = section.getDouble("x");
-        double y = section.getDouble("y");
-        double z = section.getDouble("z");
-        float yaw = (float) section.getDouble("yaw", 0.0); // Default to 0 if not present
-        float pitch = (float) section.getDouble("pitch", 0.0); // Default to 0 if not present
-
-        return new Location(world, x, y, z, yaw, pitch);
+        try {
+            double x = section.getDouble("x");
+            double y = section.getDouble("y");
+            double z = section.getDouble("z");
+            float yaw = (float) section.getDouble("yaw", 0.0); // Default to 0 if not present
+            float pitch = (float) section.getDouble("pitch", 0.0); // Default to 0 if not present
+            return new Location(world, x, y, z, yaw, pitch);
+        } catch (Exception e) {
+            logger.warning("Error parsing coordinates for location in section '" + section.getCurrentPath() + "': " + e.getMessage());
+            return null;
+        }
     }
 
     /**
-     * Loads a list of Locations from a configuration section representing a list of location maps.
-     *
-     * @param section The ConfigurationSection containing the list.
+     * Loads a list of Locations from a list of maps.
+     * This is a helper method for loadLocationList.
+     * @param locationMaps The List of Maps, where each map represents a location.
      * @param world The world for these locations.
+     * @param configPathForLogging The configuration path string for logging purposes.
      * @param logger A logger for reporting errors.
-     * @return A List of Locations. The list may be empty if no valid locations are found.
+     * @return A List of Locations.
      */
-    public static List<Location> loadLocationList(ConfigurationSection section, World world, Logger logger) {
+    private static List<Location> loadLocationListFromMaps(List<Map<?, ?>> locationMaps, World world, String configPathForLogging, Logger logger) {
         List<Location> locations = new ArrayList<>();
-        if (section == null) {
-            logger.warning("Cannot load location list: configuration section is null.");
-            return locations;
-        }
         if (world == null) {
-            logger.warning("Cannot load location list from section '" + section.getCurrentPath() + "': world is null.");
+            logger.warning("Cannot load location list from maps for path '" + configPathForLogging + "': world is null.");
+            return locations;
+        }
+        if (locationMaps == null) { // This check is important
+            logger.warning("Cannot load location list from maps for path '" + configPathForLogging + "': provided map list is null (path might be incorrect or not a list).");
             return locations;
         }
 
-        List<Map<?, ?>> locationMaps = section.getMapList(""); // Assumes the section itself is a list of maps
-        if (locationMaps.isEmpty() && section.isList("")) { // Fallback if getMapList is empty but it is a list
-            try {
-                List<?> rawList = section.getList("");
-                if (rawList != null) {
-                    for (Object item : rawList) {
-                        if (item instanceof ConfigurationSection) {
-                            // This case is unlikely if getMapList didn't work, but for completeness
-                            Location loc = loadLocation((ConfigurationSection) item, world, logger);
-                            if (loc != null) {
-                                locations.add(loc);
-                            }
-                        } else if (item instanceof Map) {
-                            // Manually create a temporary ConfigurationSection-like structure or adapt
-                            // This part is tricky as Bukkit's API expects ConfigurationSection for easy parsing
-                            // For simplicity, we'll assume getMapList works for lists of location objects.
-                            // If not, manual parsing of the Map is needed.
-                            logger.finer("Found a raw map in location list, manual parsing would be needed if not a ConfigurationSection.");
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                logger.warning("Error trying to parse location list from section '" + section.getCurrentPath() + "': " + e.getMessage());
-            }
-        }
-
-
+        int entryIndex = 0;
         for (Map<?, ?> map : locationMaps) {
-            // Bukkit's getMapList converts list items into Maps. We need to adapt them or use a sub-section approach.
-            // A common way is to have named subsections for each location in a list,
-            // or ensure the list items are directly parsable as ConfigurationSections (which getMapList might not do).
-
-            // Let's assume the map can be treated as a source for a temporary ConfigurationSection
-            // or that the structure is like:
-            // spawns:
-            //   spawn1: {x,y,z}
-            //   spawn2: {x,y,z}
-            // If it's truly a list of anonymous maps, parsing is more direct:
-            if (map.containsKey("x") && map.containsKey("y") && map.containsKey("z")) {
-                double x = ((Number) map.get("x")).doubleValue();
-                double y = ((Number) map.get("y")).doubleValue();
-                double z = ((Number) map.get("z")).doubleValue();
-                float yaw = map.containsKey("yaw") ? ((Number) map.get("yaw")).floatValue() : 0.0f;
-                float pitch = map.containsKey("pitch") ? ((Number) map.get("pitch")).floatValue() : 0.0f;
-                locations.add(new Location(world, x, y, z, yaw, pitch));
+            entryIndex++;
+            if (map != null && map.containsKey("x") && map.containsKey("y") && map.containsKey("z")) {
+                try {
+                    double x = ((Number) map.get("x")).doubleValue();
+                    double y = ((Number) map.get("y")).doubleValue();
+                    double z = ((Number) map.get("z")).doubleValue();
+                    float yaw = map.containsKey("yaw") ? ((Number) map.get("yaw")).floatValue() : 0.0f;
+                    float pitch = map.containsKey("pitch") ? ((Number) map.get("pitch")).floatValue() : 0.0f;
+                    locations.add(new Location(world, x, y, z, yaw, pitch));
+                } catch (Exception e) {
+                    logger.warning("Error parsing location entry #" + entryIndex + " in list for path '" + configPathForLogging + "': " + e.getMessage() + " - Entry: " + map.toString());
+                }
             } else {
-                logger.warning("Skipping invalid location entry in list under section '" + section.getCurrentPath() + "': missing x, y, or z.");
+                logger.warning("Skipping invalid location entry #" + entryIndex + " in list for path '" + configPathForLogging + "': missing x, y, or z, or map is null. Entry: " + (map == null ? "null" : map.toString()));
             }
         }
         if (locations.isEmpty() && !locationMaps.isEmpty()) {
-            logger.info("Parsed location list for " + section.getCurrentPath() + " but no valid locations were constructed. Check map structure.");
+            logger.warning("Parsed location list for '" + configPathForLogging + "' but no valid locations were constructed. Check map structures within the list.");
+        }
+        return locations;
+    }
+
+
+    /**
+     * Loads a list of Locations from a configuration section using a given key that points to a list of location maps.
+     *
+     * @param parentSection The ConfigurationSection containing the list.
+     * @param listKey The key within parentSection that holds the list of location maps (e.g., "game_area").
+     * @param world The world for these locations.
+     * @param logger A logger for reporting errors.
+     * @return A List of Locations. The list may be empty if no valid locations are found or key doesn't exist/isn't a list.
+     */
+    public static List<Location> loadLocationList(ConfigurationSection parentSection, String listKey, World world, Logger logger) {
+        if (parentSection == null) {
+            logger.warning("Cannot load location list for key '" + listKey + "': parent configuration section is null.");
+            return new ArrayList<>();
         }
 
+        if (!parentSection.contains(listKey)) {
+            logger.warning("Location list key '" + listKey + "' not found in section '" + parentSection.getCurrentPath() + "'. Returning empty list.");
+            return new ArrayList<>();
+        }
+        // Bukkit's getMapList will return an empty list if the path is not a list or doesn't exist,
+        // so we don't strictly need parentSection.isList(listKey) if we trust getMapList's behavior.
+        // However, adding an isList check can provide more specific logging.
+        if (!parentSection.isList(listKey)){
+            logger.warning("Path '" + parentSection.getCurrentPath() + "." + listKey + "' is not a list in the configuration. Expected a list of location objects.");
+            return new ArrayList<>();
+        }
 
-        return locations;
+        List<Map<?, ?>> locationMaps = parentSection.getMapList(listKey);
+        // getMapList returns an empty list if the path is not a list or doesn't exist.
+        // It will throw an exception if the list contains non-map elements.
+        if (locationMaps.isEmpty() && parentSection.get(listKey) != null) { // Check if the key exists but getMapList returned empty (e.g. list of strings)
+            logger.warning("Location list for key '" + listKey + "' in section '" + parentSection.getCurrentPath() + "' was found but could not be parsed as a list of maps (is it a list of strings or numbers instead of location objects?).");
+        }
+
+        return loadLocationListFromMaps(locationMaps, world, parentSection.getCurrentPath() + "." + listKey, logger);
     }
 
     /**
