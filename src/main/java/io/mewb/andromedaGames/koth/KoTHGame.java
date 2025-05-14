@@ -3,21 +3,23 @@ package io.mewb.andromedaGames.koth;
 import io.mewb.andromedaGames.AndromedaGames;
 import io.mewb.andromedaGames.game.Game;
 import io.mewb.andromedaGames.game.GameState;
-import io.mewb.andromedaGames.utils.LocationUtil; // Import LocationUtil
+import io.mewb.andromedaGames.utils.LocationUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.file.FileConfiguration; // Import FileConfiguration
+import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayList;
+import java.util.Collections; // For unmodifiable set
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set; // For getPlayersInGame()
 import java.util.UUID;
 import java.util.logging.Level;
 
@@ -32,37 +34,31 @@ public class KoTHGame extends Game {
     private int timeElapsedSeconds;
     private int minPlayersToStart;
     private int countdownSeconds;
-    // private int autoStartPlayers; // Optional
 
     // Arena details
     private String arenaSchematicName;
     private Location arenaPasteLocation;
     private Location lobbySpawn;
-    private List<Location> gameSpawns; // Changed to a list for multiple spawn points
+    private List<Location> gameSpawns;
     private String worldName;
 
+    // Game state tracking (playersInGame is inherited from Game class)
     private final Map<UUID, Integer> playerScores;
     private BukkitTask gameTickTask;
     private BukkitTask countdownTask;
 
-    private FileConfiguration gameConfig; // Store reference to its own config
+    private FileConfiguration gameConfig;
 
     public KoTHGame(AndromedaGames plugin, String gameId, String arenaId) {
-        super(plugin, gameId, arenaId); // arenaId is now primarily schematic name
-        this.playersInGame = new HashSet<>();
+        super(plugin, gameId, arenaId);
+        this.playersInGame = new HashSet<>(); // Initialize inherited field
         this.playerScores = new HashMap<>();
         this.gameSpawns = new ArrayList<>();
-        this.gameState = GameState.UNINITIALIZED; // Start as uninitialized until configured
+        this.gameState = GameState.UNINITIALIZED;
     }
 
-    /**
-     * Configures the game using its specific FileConfiguration.
-     * This is called by GameManager after the config is loaded.
-     * The old load() method's content is moved here.
-     * @param config The FileConfiguration for this game instance.
-     */
     public void configure(FileConfiguration config) {
-        this.gameConfig = config; // Store for later use (e.g., saving changes)
+        this.gameConfig = config;
         this.logger.info("Configuring KoTH game: " + gameId + " (Arena ID/Schematic: " + arenaId + ")");
 
         if (!config.getBoolean("enabled", false)) {
@@ -85,8 +81,7 @@ public class KoTHGame extends Game {
             return;
         }
 
-        // Arena settings
-        this.arenaSchematicName = config.getString("arena.schematic_name", this.arenaId); // Fallback to arenaId if not specified
+        this.arenaSchematicName = config.getString("arena.schematic_name", this.arenaId);
         ConfigurationSection pasteLocationSection = config.getConfigurationSection("arena.paste_location");
         this.arenaPasteLocation = LocationUtil.loadLocation(pasteLocationSection, gameWorld, this.logger);
 
@@ -97,7 +92,6 @@ public class KoTHGame extends Game {
             setGameState(GameState.DISABLED);
             return;
         } else {
-            // Attempt to load/paste the arena schematic
             this.logger.info("Attempting to load arena schematic: " + this.arenaSchematicName + " for game " + gameId);
             boolean pasted = plugin.getArenaManager().pasteSchematic(this.arenaSchematicName, this.arenaPasteLocation);
             if (!pasted) {
@@ -108,7 +102,6 @@ public class KoTHGame extends Game {
             this.logger.info("Arena '" + this.arenaSchematicName + "' loaded successfully for game " + gameId);
         }
 
-        // KoTH specific settings
         ConfigurationSection kothSettings = config.getConfigurationSection("koth_settings");
         if (kothSettings == null) {
             this.logger.severe("Missing 'koth_settings' section for game '" + gameId + "'. Disabling game.");
@@ -121,9 +114,7 @@ public class KoTHGame extends Game {
         this.gameDurationSeconds = kothSettings.getInt("game_duration_seconds", 300);
         this.minPlayersToStart = kothSettings.getInt("min_players_to_start", 2);
         this.countdownSeconds = kothSettings.getInt("countdown_seconds", 10);
-        // this.autoStartPlayers = kothSettings.getInt("auto_start_players", 0); // Example
 
-        // Spawn points
         ConfigurationSection spawnsSection = config.getConfigurationSection("spawns");
         if (spawnsSection == null) {
             this.logger.severe("Missing 'spawns' section for game '" + gameId + "'. Disabling game.");
@@ -137,8 +128,6 @@ public class KoTHGame extends Game {
             this.gameSpawns = LocationUtil.loadLocationList(gameAreaSpawnsSection, gameWorld, this.logger);
         }
 
-
-        // Validate critical locations
         if (this.hillCenter == null) {
             this.logger.severe("Hill center not configured correctly for " + gameId + ". Disabling game.");
             setGameState(GameState.DISABLED); return;
@@ -173,7 +162,6 @@ public class KoTHGame extends Game {
             }
         }
     }
-
 
     @Override
     public void unload() {
@@ -408,6 +396,33 @@ public class KoTHGame extends Game {
         }
     }
 
+    // --- Getters for VotingHooks ---
+    /**
+     * Gets the center location of the King of the Hill point.
+     * @return The Location of the hill center, or null if not set.
+     */
+    public Location getHillCenter() {
+        return this.hillCenter;
+    }
+
+    /**
+     * Gets the radius of the King of the Hill capture zone.
+     * @return The radius in blocks.
+     */
+    public int getHillRadius() {
+        return this.hillRadius;
+    }
+
+    /**
+     * Gets an unmodifiable set of UUIDs for players currently in this game instance.
+     * The `playersInGame` field is inherited from the `Game` superclass.
+     * @return An unmodifiable Set of player UUIDs.
+     */
+    public Set<UUID> getPlayersInGame() {
+        return Collections.unmodifiableSet(this.playersInGame);
+    }
+
+    // --- Admin methods to set game parameters (should also save to config) ---
     public void setHillLocation(Location location) {
         if (location == null || gameConfig == null) return;
         this.hillCenter = location.clone();

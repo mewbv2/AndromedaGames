@@ -10,7 +10,7 @@ import java.util.logging.Logger; // Ensure Logger is imported
 
 public abstract class Game {
 
-    protected final AndromedaGames plugin;
+    public final AndromedaGames plugin;
     protected final Logger logger; // Logger is declared here
     protected final String gameId;
     protected final String arenaId;

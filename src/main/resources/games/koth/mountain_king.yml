@@ -1,0 +1,90 @@
+# File: plugins/AndromedaGames/games/koth/mountain_king.yml
+
+# Unique identifier for this game instance.
+# It's good practice if this matches the filename (without .yml).
+game_id: "mountain_king"
+
+# Type of the game, for GameManager to know how to load it.
+game_type: "KOTH" # Currently, GameManager specifically looks for KoTH games.
+
+# Set to true to enable this game, false to disable it from loading.
+enabled: true
+
+# World where this game takes place. This world MUST be loaded by the server.
+world: "world_minigames" # Replace with the actual name of your minigames world
+
+# Arena settings
+arena:
+  # Name of the schematic file located in plugins/AndromedaGames/schematics/
+  # Example: "mountain_arena.schem" or just "mountain_arena" ('.schem' is appended if missing)
+  schematic_name: "mountain_arena"
+
+  # Coordinates where the schematic's origin (usually its lowest, most-negative corner) should be pasted.
+  paste_location:
+    x: 100.0
+    y: 64.0
+    z: 200.0
+    # yaw: 0.0 # Optional, usually not needed for schematic pasting
+    # pitch: 0.0 # Optional
+
+# KoTH specific game settings
+koth_settings:
+  # Absolute world coordinates for the center of the hill/capture point.
+  # These coordinates should be within the pasted schematic area.
+  hill_center:
+    x: 105.5
+    y: 70.0
+    z: 205.5
+  hill_radius: 5 # The radius of the circular hill capture zone.
+
+  game_duration_seconds: 300 # How long the game lasts (e.g., 300 seconds = 5 minutes).
+  min_players_to_start: 2    # Minimum number of players required for the game to start.
+  countdown_seconds: 10      # Duration of the pre-game countdown.
+
+  # Optional: Number of players that trigger an automatic game start if the game is in WAITING state.
+  # auto_start_players: 2
+
+# Spawn points for players
+spawns:
+  # Lobby spawn: where players teleport when they join the game, or after the game ends.
+  lobby:
+    x: 95.0
+    y: 65.0
+    z: 195.0
+    yaw: 90.0
+    pitch: 0.0
+
+  # Game area spawns: where players teleport when the game starts.
+  # This is a list, allowing for multiple spawn points. Players will cycle through them.
+  game_area:
+    - x: 102.0
+      y: 68.0
+      z: 202.0
+      yaw: 0.0
+      pitch: 0.0
+    - x: 108.0
+      y: 68.0
+      z: 208.0
+      yaw: 180.0
+      pitch: 0.0
+    - x: 102.0
+      y: 68.0
+      z: 208.0
+      yaw: -90.0
+      pitch: 0.0
+    - x: 108.0
+      y: 68.0
+      z: 202.0
+      yaw: 90.0
+      pitch: 0.0
+
+# Voting Hook Settings (Conceptual - for when we implement voting)
+# voting:
+#   enabled: true
+#   interval_seconds: 90 # How often a vote occurs
+#   duration_seconds: 20 # How long players have to vote
+#   hooks_available: # List of VotingHook IDs that can be chosen for this game
+#     - "koth_tnt_drop"
+#     - "koth_low_gravity"
+#     - "koth_speed_boost" # Example of another hook we might create
+#     - "koth_hill_shrink"
