@@ -2,6 +2,7 @@ package io.mewb.andromedaGames.game;
 
 import io.mewb.andromedaGames.AndromedaGames;
 import org.bukkit.World;
+import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 
 import java.util.Collections; // Added for Collections.emptySet()
@@ -27,6 +28,8 @@ public abstract class Game {
         // playersInGame MUST be initialized in the constructor of the concrete game class
         // e.g., this.playersInGame = new HashSet<>();
     }
+
+    public abstract void configure(FileConfiguration config);
 
     // --- Abstract methods to be implemented by each specific game type ---
     public abstract void load();

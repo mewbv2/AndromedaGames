@@ -1,0 +1,44 @@
+# File: plugins/AndromedaGames/games/infection/infected_arena.yml
+
+game_id: "infected_arena"
+game_type: "INFECTION" # Important for GameManager if it handles multiple types
+enabled: true
+world: "minigame_world" # Replace with your actual world name
+
+arena:
+  schematic_name: "infection_map_1" # In plugins/AndromedaGames/schematics/
+  paste_location:
+    x: -50.0
+    y: 70.0
+    z: 150.0
+
+infection_settings:
+  initial_infected_count: 1 # Number of players who start as infected
+  game_duration_seconds: 300 # 5 minutes for survivors to win if not all infected
+  countdown_seconds: 15     # Time before the first infected is revealed and game starts
+  scoreboard_title: "&c&lINFECTION"
+  survivor_gamemode: "SURVIVAL" # Gamemode for survivors
+  infected_gamemode: "SURVIVAL" # Gamemode for infected (could be ADVENTURE for restrictions)
+  min_players_to_start: 2 # Minimum players to start an infection game
+
+spawns:
+  lobby:
+    x: -45.0
+    y: 71.0
+    z: 145.0
+    yaw: 0.0
+    pitch: 0.0
+  game_area: # All players spawn here initially; then one (or more) become infected
+    - { x: -55.0, y: 71.0, z: 155.0, yaw: 0.0, pitch: 0.0 }
+    - { x: -60.0, y: 71.0, z: 150.0, yaw: 90.0, pitch: 0.0 }
+    - { x: -55.0, y: 71.0, z: 145.0, yaw: 180.0, pitch: 0.0 }
+    - { x: -50.0, y: 71.0, z: 150.0, yaw: -90.0, pitch: 0.0 }
+
+# Voting hook settings (can be added later for Infection)
+# voting:
+#   enabled: false
+#   interval_seconds: 75
+#   duration_seconds: 15
+#   hooks_available:
+#     - "infection_slow_all"
+#     - "infection_reveal_survivors"

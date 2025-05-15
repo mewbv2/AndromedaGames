@@ -3,10 +3,14 @@ package io.mewb.andromedaGames;
 import io.mewb.andromedaGames.arena.ArenaManager;
 import io.mewb.andromedaGames.command.AndromedaGamesCommand;
 import io.mewb.andromedaGames.command.KoTHCommand;
+import io.mewb.andromedaGames.command.VoteCommand; // Assuming VoteCommand is created
 import io.mewb.andromedaGames.config.ConfigManager;
 import io.mewb.andromedaGames.game.GameManager;
-import org.bukkit.plugin.Plugin; // Import Bukkit Plugin class
+import io.mewb.andromedaGames.player.PlayerStateManager; // Import PlayerStateManager
+import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
+
+import java.util.logging.Logger;
 
 public class AndromedaGames extends JavaPlugin {
 
@@ -15,6 +19,7 @@ public class AndromedaGames extends JavaPlugin {
     private FAWEProvider faweProvider;
     private ArenaManager arenaManager;
     private ConfigManager configManager;
+    private PlayerStateManager playerStateManager; // Add PlayerStateManager instance
 
     @Override
     public void onEnable() {
@@ -22,7 +27,7 @@ public class AndromedaGames extends JavaPlugin {
 
         // Initialize FAWE Provider first as ArenaManager depends on it
         if (!checkForFAWE()) {
-            // checkForFAWE() now logs the specific reason
+            // checkForFAWE() now logs the specific reason if it fails
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
@@ -37,16 +42,21 @@ public class AndromedaGames extends JavaPlugin {
         this.configManager = new ConfigManager(this);
         getLogger().info("ConfigManager initialized.");
 
-        // Initialize Game Manager - GameManager will use ConfigManager
+        // Initialize PlayerStateManager
+        this.playerStateManager = new PlayerStateManager(getLogger());
+        getLogger().info("PlayerStateManager initialized.");
+
+        // Initialize Game Manager - GameManager will use ConfigManager and PlayerStateManager
         this.gameManager = new GameManager(this);
-        this.gameManager.initialize();
+        this.gameManager.initialize(); // This now registers events and loads game configs
         getLogger().info("GameManager initialized.");
 
-        saveDefaultConfig();
+        // Load main plugin configuration (config.yml)
+        saveDefaultConfig(); // Saves a default config.yml if one doesn't exist
 
         getLogger().info("AndromedaGames is enabling!");
 
-        // Register Commands
+        // Register Commands using Bukkit API
         AndromedaGamesCommand agCommandExecutor = new AndromedaGamesCommand(this);
         if (this.getCommand("andromedagames") != null) {
             this.getCommand("andromedagames").setExecutor(agCommandExecutor);
@@ -65,17 +75,14 @@ public class AndromedaGames extends JavaPlugin {
             getLogger().severe("Could not register 'koth' command! Check plugin.yml.");
         }
 
-        // Register Vote Command
-        // Assuming VoteCommand class exists and is structured similarly
-        // VoteCommand voteExecutor = new VoteCommand(this, this.gameManager);
-        // if (this.getCommand("vote") != null) {
-        //     this.getCommand("vote").setExecutor(voteExecutor);
-        //     // this.getCommand("vote").setTabCompleter(voteExecutor); // If it has tab completion
-        //     getLogger().info("Registered 'vote' command.");
-        // } else {
-        //     getLogger().severe("Could not register 'vote' command! Check plugin.yml.");
-        // }
-
+        VoteCommand voteExecutor = new VoteCommand(this, this.gameManager);
+        if (this.getCommand("vote") != null) {
+            this.getCommand("vote").setExecutor(voteExecutor);
+            this.getCommand("vote").setTabCompleter(voteExecutor); // Assuming VoteCommand implements TabCompleter
+            getLogger().info("Registered 'vote' command.");
+        } else {
+            getLogger().severe("Could not register 'vote' command! Check plugin.yml.");
+        }
 
         getLogger().info("AndromedaGames has been enabled successfully!");
     }
@@ -83,16 +90,21 @@ public class AndromedaGames extends JavaPlugin {
     @Override
     public void onDisable() {
         getLogger().info("AndromedaGames is disabling!");
+
         if (gameManager != null) {
-            gameManager.shutdown();
+            gameManager.shutdown(); // Shuts down all active games, should trigger player state restoration
         }
+
+        // Any other cleanup tasks (e.g., closing database connections if added later)
+
         instance = null;
         getLogger().info("AndromedaGames has been disabled.");
     }
 
     /**
-     * Checks if FastAsyncWorldEdit is present and enabled on the server.
-     * @return true if FAWE is found and enabled, false otherwise.
+     * Checks if FastAsyncWorldEdit is present and enabled on the server,
+     * and if its API is accessible.
+     * @return true if FAWE is found, enabled, and API accessible, false otherwise.
      */
     private boolean checkForFAWE() {
         Plugin fawePlugin = getServer().getPluginManager().getPlugin("FastAsyncWorldEdit");
@@ -109,8 +121,6 @@ public class AndromedaGames extends JavaPlugin {
         }
 
         // As an additional check, ensure the WorldEdit API can be accessed.
-        // This is what FAWEProvider will try to do.
-        // This step is more of a "can we get the API instance" rather than checking a specific class name.
         try {
             if (com.sk89q.worldedit.WorldEdit.getInstance() == null) {
                 // This case should ideally be caught by fawePlugin.isEnabled() being false if FAWE failed to init its core.
@@ -147,6 +157,14 @@ public class AndromedaGames extends JavaPlugin {
         return configManager;
     }
 
+    public PlayerStateManager getPlayerStateManager() {
+        return playerStateManager;
+    }
+
+    /**
+     * Inner class to provide access to the FAWE API.
+     * This helps encapsulate the FAWE interaction.
+     */
     public static class FAWEProvider {
         private com.sk89q.worldedit.WorldEdit fawe;
 
@@ -156,15 +174,22 @@ public class AndromedaGames extends JavaPlugin {
             try {
                 this.fawe = com.sk89q.worldedit.WorldEdit.getInstance();
             } catch (Exception e) { // Catching a broader exception just in case.
-                AndromedaGames.getInstance().getLogger().severe("Critical error in FAWEProvider constructor: Failed to get FAWE instance: " + e.getMessage());
-                // This shouldn't happen if checkForFAWE worked, but as a safeguard:
-                this.fawe = null;
+                // Use a temporary logger if getInstance() might be null during early init
+                Logger tempLogger = (AndromedaGames.getInstance() != null) ? AndromedaGames.getInstance().getLogger() : Logger.getLogger("AndromedaGames-FAWEProvider");
+                tempLogger.severe("Critical error in FAWEProvider constructor: Failed to get FAWE instance: " + e.getMessage());
+                this.fawe = null; // Ensure fawe is null if initialization fails
             }
         }
 
+        /**
+         * Gets the FAWE API instance.
+         * @return The WorldEdit instance, or null if it could not be initialized.
+         */
         public com.sk89q.worldedit.WorldEdit getFAWE() {
             if (this.fawe == null) {
-                AndromedaGames.getInstance().getLogger().severe("FAWE API instance is null in FAWEProvider.getFAWE(). This indicates a critical failure in FAWE initialization or our check.");
+                // Use a temporary logger if getInstance() might be null during early init
+                Logger tempLogger = (AndromedaGames.getInstance() != null) ? AndromedaGames.getInstance().getLogger() : Logger.getLogger("AndromedaGames-FAWEProvider");
+                tempLogger.severe("FAWE API instance is null in FAWEProvider.getFAWE(). This indicates a critical failure in FAWE initialization or our check.");
             }
             return this.fawe;
         }
