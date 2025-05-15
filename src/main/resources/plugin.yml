@@ -1,8 +1,8 @@
 name: AndromedaGames
-version: 0.2.1 # Incremented version slightly
+version: 0.2.2 # Incremented version
 main: io.mewb.andromedaGames.AndromedaGames
-api-version: 1.19 # Or your target server version
-author: YourName # Or Mewb
+api-version: 1.19
+author: Mewb
 description: A collection of fun mini-games!
 depend: [FastAsyncWorldEdit] # FAWE is a hard dependency
 
@@ -16,12 +16,16 @@ commands:
     description: Commands for King of the Hill.
     aliases: [kingofthehill]
     usage: /<command> <subcommand> [args...]
-    # Permissions for subcommands are checked within the KoTHCommand executor
   vote:
     description: Casts your vote during a game event.
     aliases: [gamevote]
     usage: /<command> <option_number>
-    permission: andromedagames.player.vote # Permission to use the vote command
+    permission: andromedagames.player.vote
+  infection: # New command for Infection gamemode
+    description: Commands for the Infection mini-game.
+    aliases: [infect]
+    usage: /<command> <subcommand> [args...]
+    # Specific subcommand permissions will be checked in InfectionCommand.java
 
 permissions:
   andromedagames.admin:
@@ -30,8 +34,10 @@ permissions:
   andromedagames.admin.arena.save:
     description: Allows saving of arena schematics using /ag savearena.
     default: op
-  andromedagames.admin.koth.manage: # Broad permission for KoTH admin subcommands
-    description: Allows access to KoTH administrative commands like start, stop, sethill, setradius.
+
+  # KoTH Permissions
+  andromedagames.admin.koth.manage:
+    description: Allows access to KoTH administrative commands.
     default: op
   andromedagames.admin.koth.start:
     description: Allows force-starting a KoTH game.
@@ -45,13 +51,31 @@ permissions:
   andromedagames.admin.koth.setradius:
     description: Allows setting the hill radius for a KoTH game.
     default: op
-
   andromedagames.player.koth.join:
     description: Allows a player to join a KoTH game.
     default: true
   andromedagames.player.koth.leave:
     description: Allows a player to leave a KoTH game.
     default: true
+
+  # Infection Permissions
+  andromedagames.admin.infection.manage: # Broad admin permission for infection
+    description: Allows access to Infection administrative commands.
+    default: op
+  andromedagames.admin.infection.start:
+    description: Allows force-starting an Infection game.
+    default: op
+  andromedagames.admin.infection.stop:
+    description: Allows force-stopping an Infection game.
+    default: op
+  andromedagames.player.infection.join:
+    description: Allows a player to join an Infection game.
+    default: true
+  andromedagames.player.infection.leave:
+    description: Allows a player to leave an Infection game.
+    default: true
+
+  # General Player Permissions
   andromedagames.player.vote:
     description: Allows a player to cast a vote during mini-game events.
     default: true
