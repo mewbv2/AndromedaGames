@@ -1,6 +1,6 @@
 package io.mewb.andromedaGames.koth.votinghooks;
 
-import io.mewb.andromedaGames.game.Game;
+import io.mewb.andromedaGames.game.GameInstance;
 import io.mewb.andromedaGames.game.GameState;
 import io.mewb.andromedaGames.koth.KoTHGame;
 import io.mewb.andromedaGames.utils.ParticleUtil;
@@ -41,55 +41,68 @@ public class HillZoneShrinkHook implements VotingHook {
     }
 
     @Override
-    public boolean canApply(Game game) {
+    public boolean canApply(GameInstance game) {
         if (!(game instanceof KoTHGame)) {
             return false;
         }
         KoTHGame kothGame = (KoTHGame) game;
-        // Don't apply if the hill is already very small
-        return kothGame.getHillRadius() > MIN_RADIUS_AFTER_SHRINK + 1; // Ensure it can shrink meaningfully
+        // Don't apply if the hill is already very small or smaller than the intended shrink target
+        return kothGame.getCurrentHillRadius() > MIN_RADIUS_AFTER_SHRINK + 1; // Ensure it can shrink meaningfully
     }
 
     @Override
-    public void apply(Game game, List<Player> voters) {
+    public void apply(GameInstance game, List<Player> voters) {
         if (!(game instanceof KoTHGame)) {
-            game.plugin.getLogger().warning(getId() + " can only be applied to KoTHGame instances.");
+            // This should ideally not happen if canApply is checked by VoteManager
+            game.plugin.getLogger().warning(getId() + " was applied to a non-KoTHGame instance: " + game.getInstanceId());
             return;
         }
         KoTHGame kothGame = (KoTHGame) game;
-        kothGame.broadcastToGamePlayers(ChatColor.RED + "" + ChatColor.BOLD + getDisplayName() + " The hill is shrinking!");
+        kothGame.broadcastToGamePlayers(ChatColor.RED + "" + ChatColor.BOLD + getDisplayName() + ChatColor.YELLOW + " The hill is shrinking!");
 
-        final int originalRadius = kothGame.getHillRadius();
-        int newRadius = Math.max(MIN_RADIUS_AFTER_SHRINK, originalRadius / 2); // Shrink by half, but not below min
+        final int originalRadius = kothGame.getCurrentHillRadius(); // Use getCurrentHillRadius
+        int newRadius = Math.max(MIN_RADIUS_AFTER_SHRINK, originalRadius / 2);
         if (newRadius >= originalRadius) {
             kothGame.broadcastToGamePlayers(ChatColor.YELLOW + "The hill is too small to shrink further!");
-            return; // Already too small or calculation didn't shrink it
+            // If it can't shrink, ensure the hook doesn't incorrectly stay "active"
+            // GameInstance.setActiveVotingHook(null) might be called by VoteManager or game logic after apply finishes.
+            // For now, we just log and return. The duration implies it will wear off.
+            game.plugin.getLogger().info(getId() + " for instance " + game.getInstanceId().toString().substring(0,8) + " did not shrink hill further from radius " + originalRadius);
+            return;
         }
 
-        // Apply visual/sound effect for shrinking
-        Location hillCenter = kothGame.getHillCenter();
+        Location hillCenter = kothGame.getAbsoluteHillCenter(); // Use getAbsoluteHillCenter
         if (hillCenter != null && hillCenter.getWorld() != null) {
             ParticleUtil.spawnHelixEffect(hillCenter, Particle.CRIT, originalRadius, 2, 30, 2);
             hillCenter.getWorld().playSound(hillCenter, Sound.BLOCK_CONDUIT_DEACTIVATE, SoundCategory.AMBIENT, 1f, 0.8f);
         }
 
-        kothGame.setTemporaryHillRadius(newRadius); // KoTHGame needs this new method
+        kothGame.adminSetHillRadius(newRadius); // Use adminSetHillRadius for temporary change
 
-        // Schedule task to revert the radius
         new BukkitRunnable() {
             @Override
             public void run() {
-                if (kothGame.getGameState() == GameState.ACTIVE || kothGame.getGameState() == GameState.ENDING) { // Check if game still relevant
-                    // Only revert if current radius is the shrunk one, to avoid issues if another hook changed it
-                    if (kothGame.getHillRadius() == newRadius) {
-                        kothGame.setTemporaryHillRadius(originalRadius); // Revert to original
-                        kothGame.broadcastToGamePlayers(ChatColor.GREEN + "The hill has returned to its normal size!");
-                        if (hillCenter != null && hillCenter.getWorld() != null) {
-                            ParticleUtil.spawnHelixEffect(hillCenter, Particle.HAPPY_VILLAGER, newRadius, 2, 30, 2);
-                            hillCenter.getWorld().playSound(hillCenter, Sound.BLOCK_CONDUIT_ACTIVATE, SoundCategory.AMBIENT, 1f, 1.2f);
+                // Check if the game instance still exists and is in a relevant state
+                GameInstance currentInstance = game.plugin.getGameManager().getRunningGameInstance(game.getInstanceId()).orElse(null);
+                if (currentInstance == null || !(currentInstance instanceof KoTHGame)) {
+                    this.cancel();
+                    return;
+                }
+                KoTHGame currentKothGame = (KoTHGame) currentInstance;
+
+                if (currentKothGame.getGameState() == GameState.ACTIVE || currentKothGame.getGameState() == GameState.ENDING) {
+                    if (currentKothGame.getCurrentHillRadius() == newRadius) { // Check if radius is still the shrunk one
+                        currentKothGame.adminSetHillRadius(originalRadius); // Revert to original
+                        currentKothGame.broadcastToGamePlayers(ChatColor.GREEN + "The hill has returned to its normal size!");
+                        Location currentHillCenter = currentKothGame.getAbsoluteHillCenter();
+                        if (currentHillCenter != null && currentHillCenter.getWorld() != null) {
+                            ParticleUtil.spawnHelixEffect(currentHillCenter, Particle.HAPPY_VILLAGER, newRadius, 2, 30, 2); // Particles at newRadius before it visually expands
+                            currentHillCenter.getWorld().playSound(currentHillCenter, Sound.BLOCK_CONDUIT_ACTIVATE, SoundCategory.AMBIENT, 1f, 1.2f);
                         }
                     } else {
-                        game.plugin.getLogger().info("Hill radius was not reverted by " + getId() + " for " + game.getGameId() + " as it was already changed.");
+                        // Log using the instanceId for clarity
+                        game.plugin.getLogger().info("Hill radius for instance " + game.getInstanceId().toString().substring(0,8) +
+                                " was not reverted by " + getId() + " as it was already changed from the shrunk radius (" + newRadius + ") to " + currentKothGame.getCurrentHillRadius() + ".");
                     }
                 }
             }

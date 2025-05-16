@@ -1,10 +1,10 @@
 name: AndromedaGames
-version: 0.2.2 # Incremented version
+version: 0.3.0 # Incremented version
 main: io.mewb.andromedaGames.AndromedaGames
 api-version: 1.19
-author: Mewb
+author: YourName
 description: A collection of fun mini-games!
-depend: [FastAsyncWorldEdit] # FAWE is a hard dependency
+depend: [FastAsyncWorldEdit]
 
 commands:
   andromedagames:
@@ -21,58 +21,57 @@ commands:
     aliases: [gamevote]
     usage: /<command> <option_number>
     permission: andromedagames.player.vote
-  infection: # New command for Infection gamemode
+  infection:
     description: Commands for the Infection mini-game.
     aliases: [infect]
     usage: /<command> <subcommand> [args...]
-    # Specific subcommand permissions will be checked in InfectionCommand.java
+  capturetheshard: # New command for CTS
+    description: Commands for Capture The Shard.
+    aliases: [cts, ctf] # Common aliases
+    usage: /<command> <subcommand> [args...]
 
 permissions:
   andromedagames.admin:
     description: Allows access to all AndromedaGames admin commands.
     default: op
   andromedagames.admin.arena.save:
-    description: Allows saving of arena schematics using /ag savearena.
+    description: Allows saving of arena schematics.
     default: op
 
   # KoTH Permissions
-  andromedagames.admin.koth.manage:
-    description: Allows access to KoTH administrative commands.
-    default: op
-  andromedagames.admin.koth.start:
-    description: Allows force-starting a KoTH game.
-    default: op
-  andromedagames.admin.koth.stop:
-    description: Allows force-stopping a KoTH game.
-    default: op
-  andromedagames.admin.koth.sethill:
-    description: Allows setting the hill location for a KoTH game.
-    default: op
-  andromedagames.admin.koth.setradius:
-    description: Allows setting the hill radius for a KoTH game.
-    default: op
-  andromedagames.player.koth.join:
-    description: Allows a player to join a KoTH game.
-    default: true
-  andromedagames.player.koth.leave:
-    description: Allows a player to leave a KoTH game.
-    default: true
+  andromedagames.admin.koth.manage: { description: Allows KoTH admin commands., default: op }
+  andromedagames.admin.koth.start: { description: Allows force-starting KoTH games., default: op }
+  andromedagames.admin.koth.stop: { description: Allows force-stopping KoTH games., default: op }
+  andromedagames.admin.koth.sethill: { description: Allows setting KoTH hill location., default: op }
+  andromedagames.admin.koth.setradius: { description: Allows setting KoTH hill radius., default: op }
+  andromedagames.player.koth.join: { description: Allows joining KoTH games., default: true }
+  andromedagames.player.koth.leave: { description: Allows leaving KoTH games., default: true }
 
   # Infection Permissions
-  andromedagames.admin.infection.manage: # Broad admin permission for infection
-    description: Allows access to Infection administrative commands.
+  andromedagames.admin.infection.manage: { description: Allows Infection admin commands., default: op }
+  andromedagames.admin.infection.start: { description: Allows starting Infection games., default: op }
+  andromedagames.admin.infection.stop: { description: Allows stopping Infection games., default: op }
+  andromedagames.player.infection.join: { description: Allows joining Infection games., default: true }
+  andromedagames.player.infection.leave: { description: Allows leaving Infection games., default: true }
+
+  # CaptureTheShard Permissions
+  andromedagames.admin.cts.manage: # Broad admin permission for CTS
+    description: Allows access to CTS administrative commands.
     default: op
-  andromedagames.admin.infection.start:
-    description: Allows force-starting an Infection game.
+  andromedagames.admin.cts.setup: # For location setting commands
+    description: Allows setting up CTS game locations.
     default: op
-  andromedagames.admin.infection.stop:
-    description: Allows force-stopping an Infection game.
+  andromedagames.admin.cts.start:
+    description: Allows force-starting a CTS game.
     default: op
-  andromedagames.player.infection.join:
-    description: Allows a player to join an Infection game.
+  andromedagames.admin.cts.stop:
+    description: Allows force-stopping a CTS game.
+    default: op
+  andromedagames.player.cts.join:
+    description: Allows a player to join a CTS game.
     default: true
-  andromedagames.player.infection.leave:
-    description: Allows a player to leave an Infection game.
+  andromedagames.player.cts.leave:
+    description: Allows a player to leave a CTS game.
     default: true
 
   # General Player Permissions

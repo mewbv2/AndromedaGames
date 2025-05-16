@@ -1,11 +1,12 @@
 package io.mewb.andromedaGames.voting;
 
 import io.mewb.andromedaGames.AndromedaGames;
-import io.mewb.andromedaGames.game.Game;
-import io.mewb.andromedaGames.game.GameState;
+import io.mewb.andromedaGames.game.GameInstance; // Changed from Game to GameInstance
+import io.mewb.andromedaGames.game.GameState;   // Assuming GameInstance has getGameState()
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Sound;
+import org.bukkit.SoundCategory;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -23,7 +24,7 @@ import java.util.stream.Collectors;
 public class VoteManager {
 
     private final AndromedaGames plugin;
-    private final Game game; // The game instance this vote manager is tied to
+    private final GameInstance game; // Changed from Game to GameInstance
     private final Logger logger;
 
     private List<VotingHook> currentVoteOptions;
@@ -32,10 +33,10 @@ public class VoteManager {
     private BukkitTask voteTimerTask;
     private int voteDurationSeconds;
 
-    public VoteManager(AndromedaGames plugin, Game game) {
+    public VoteManager(AndromedaGames plugin, GameInstance game) { // Constructor updated
         this.plugin = plugin;
         this.game = game;
-        this.logger = plugin.getLogger();
+        this.logger = plugin.getLogger(); // Assuming plugin.getLogger() is accessible
         this.playerVotes = new HashMap<>();
         this.currentVoteOptions = new ArrayList<>();
     }
@@ -48,22 +49,20 @@ public class VoteManager {
      */
     public boolean startVote(List<VotingHook> availableHooks, int durationSeconds) {
         if (isVoteActive) {
-            logger.warning("[" + game.getGameId() + "] Attempted to start a vote while one is already active.");
+            logger.warning("[" + game.getDefinition().getDefinitionId() + "-Instance:" + game.getInstanceId().toString().substring(0,8) + "] Attempted to start a vote while one is already active.");
             return false;
         }
-        if (availableHooks == null || availableHooks.isEmpty() || availableHooks.size() < 2) { // Need at least 2 options for a meaningful vote
-            logger.warning("[" + game.getGameId() + "] Attempted to start a vote with insufficient options (" + (availableHooks == null ? 0 : availableHooks.size()) + ").");
+        if (availableHooks == null || availableHooks.isEmpty() || availableHooks.size() < 2) {
+            logger.warning("[" + game.getDefinition().getDefinitionId() + "-Instance:" + game.getInstanceId().toString().substring(0,8) + "] Attempted to start a vote with insufficient options (" + (availableHooks == null ? 0 : availableHooks.size()) + ").");
             return false;
         }
         if (game.getGameState() != GameState.ACTIVE) {
-            logger.warning("[" + game.getGameId() + "] Attempted to start a vote but the game is not active.");
+            logger.warning("[" + game.getDefinition().getDefinitionId() + "-Instance:" + game.getInstanceId().toString().substring(0,8) + "] Attempted to start a vote but the game is not active.");
             return false;
         }
 
-        this.currentVoteOptions = new ArrayList<>(availableHooks); // Take a copy
-        // Optionally shuffle or select a subset if more hooks are provided than can be displayed
-        // For now, assume we display all provided (up to a reasonable limit, e.g., 3-5)
-        if (this.currentVoteOptions.size() > 5) { // Let's cap at 5 options for display sanity
+        this.currentVoteOptions = new ArrayList<>(availableHooks);
+        if (this.currentVoteOptions.size() > 5) {
             Collections.shuffle(this.currentVoteOptions);
             this.currentVoteOptions = this.currentVoteOptions.subList(0, 5);
         }
@@ -82,39 +81,33 @@ public class VoteManager {
         playVoteStartSoundToPlayers();
 
 
-        // Start the timer to end the vote
         AtomicInteger timeLeft = new AtomicInteger(durationSeconds);
         voteTimerTask = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
             if (!isVoteActive || game.getGameState() != GameState.ACTIVE) {
-                endVote(false); // Game ended or vote cancelled externally
+                endVote(false);
                 return;
             }
 
-            if (timeLeft.get() % 10 == 0 && timeLeft.get() > 0 && timeLeft.get() < durationSeconds) { // Announce every 10s, not at start/end
+            if (timeLeft.get() % 10 == 0 && timeLeft.get() > 0 && timeLeft.get() < durationSeconds) {
                 game.broadcastToGamePlayers(ChatColor.YELLOW + "Vote ends in " + timeLeft.get() + " seconds! Type " + ChatColor.GREEN + "/vote <number>");
             }
 
             if (timeLeft.decrementAndGet() <= 0) {
-                endVote(true); // Time's up, tally votes
+                endVote(true);
             }
-        }, 20L, 20L); // Check every second
+        }, 20L, 20L);
 
-        logger.info("[" + game.getGameId() + "] Vote started with options: " +
+        logger.info("[" + game.getDefinition().getDefinitionId() + "-Instance:" + game.getInstanceId().toString().substring(0,8) + "] Vote started with options: " +
                 currentVoteOptions.stream().map(VotingHook::getDisplayName).collect(Collectors.joining(", ")));
         return true;
     }
 
-    /**
-     * Allows a player to cast their vote.
-     * @param player The player voting.
-     * @param optionNumber The 1-based number of the option they are voting for.
-     * @return True if the vote was successfully cast, false otherwise.
-     */
     public boolean castVote(Player player, int optionNumber) {
         if (!isVoteActive) {
             player.sendMessage(ChatColor.RED + "There is no active vote right now.");
             return false;
         }
+        // GameInstance should have isPlayerInGame
         if (!game.isPlayerInGame(player.getUniqueId())) {
             player.sendMessage(ChatColor.RED + "You must be in the game to vote.");
             return false;
@@ -124,21 +117,17 @@ public class VoteManager {
             return false;
         }
 
-        int optionIndex = optionNumber - 1; // Convert to 0-based index
+        int optionIndex = optionNumber - 1;
         if (playerVotes.containsKey(player.getUniqueId())) {
             player.sendMessage(ChatColor.YELLOW + "You have changed your vote to: " + ChatColor.AQUA + currentVoteOptions.get(optionIndex).getDisplayName());
         } else {
             player.sendMessage(ChatColor.GREEN + "You voted for: " + ChatColor.AQUA + currentVoteOptions.get(optionIndex).getDisplayName());
         }
         playerVotes.put(player.getUniqueId(), optionIndex);
-        player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 0.7f, 1.5f);
+        player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, SoundCategory.PLAYERS, 0.7f, 1.5f);
         return true;
     }
 
-    /**
-     * Ends the current voting session, tallies votes, and applies the winning hook.
-     * @param announceWinner Whether to announce the winner and apply the hook.
-     */
     public void endVote(boolean announceWinner) {
         if (!isVoteActive) {
             return;
@@ -149,15 +138,16 @@ public class VoteManager {
         }
         voteTimerTask = null;
 
+        String gameInstanceContext = "[" + game.getDefinition().getDefinitionId() + "-Instance:" + game.getInstanceId().toString().substring(0,8) + "]";
+
         if (!announceWinner || currentVoteOptions.isEmpty()) {
-            logger.info("[" + game.getGameId() + "] Vote ended without tallying or options were empty.");
+            logger.info(gameInstanceContext + " Vote ended without tallying or options were empty.");
             game.broadcastToGamePlayers(ChatColor.YELLOW + "The vote has ended.");
             currentVoteOptions.clear();
             playerVotes.clear();
             return;
         }
 
-        // Tally votes
         int[] voteCounts = new int[currentVoteOptions.size()];
         for (Integer votedIndex : playerVotes.values()) {
             if (votedIndex >= 0 && votedIndex < voteCounts.length) {
@@ -181,11 +171,11 @@ public class VoteManager {
         }
 
         VotingHook winningHook;
-        if (winningIndex == -1) { // No votes cast
+        if (winningIndex == -1) {
             game.broadcastToGamePlayers(ChatColor.YELLOW + "No votes were cast! Choosing a random event...");
             winningIndex = (int) (Math.random() * currentVoteOptions.size());
             winningHook = currentVoteOptions.get(winningIndex);
-        } else if (tiedIndices.size() > 1) { // Tie occurred
+        } else if (tiedIndices.size() > 1) {
             game.broadcastToGamePlayers(ChatColor.YELLOW + "It's a tie! Choosing randomly among tied options...");
             winningIndex = tiedIndices.get((int) (Math.random() * tiedIndices.size()));
             winningHook = currentVoteOptions.get(winningIndex);
@@ -196,27 +186,28 @@ public class VoteManager {
         game.broadcastToGamePlayers(ChatColor.GOLD + "Vote ended! Result: " + ChatColor.AQUA + ChatColor.BOLD + winningHook.getDisplayName() + ChatColor.GOLD + " with " + maxVotes + " vote(s)!");
         playVoteEndSoundToPlayers();
 
-        // Gather list of players who voted for the winning hook (optional, for the hook's use)
         List<Player> votersForWinningHook = new ArrayList<>();
-        final int finalWinningIndex = winningIndex; // Effectively final for lambda
+        final int finalWinningIndex = winningIndex;
         playerVotes.entrySet().stream()
                 .filter(entry -> entry.getValue() == finalWinningIndex)
                 .map(entry -> Bukkit.getPlayer(entry.getKey()))
                 .filter(p -> p != null && p.isOnline())
                 .forEach(votersForWinningHook::add);
 
-        // Apply the winning hook
         try {
-            if (winningHook.canApply(game)) {
-                winningHook.apply(game, votersForWinningHook);
-                logger.info("[" + game.getGameId() + "] Applied winning voting hook: " + winningHook.getDisplayName());
+            if (winningHook.canApply(game)) { // Pass GameInstance
+                winningHook.apply(game, votersForWinningHook); // Pass GameInstance
+                logger.info(gameInstanceContext + " Applied winning voting hook: " + winningHook.getDisplayName());
+                game.setActiveVotingHook(winningHook); // Inform the game instance
             } else {
-                logger.warning("[" + game.getGameId() + "] Winning hook '" + winningHook.getDisplayName() + "' reported it cannot be applied currently.");
+                logger.warning(gameInstanceContext + " Winning hook '" + winningHook.getDisplayName() + "' reported it cannot be applied currently.");
                 game.broadcastToGamePlayers(ChatColor.RED + "Unfortunately, " + winningHook.getDisplayName() + " couldn't be activated right now.");
+                game.setActiveVotingHook(null); // Ensure no hook is considered active
             }
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "[" + game.getGameId() + "] Error applying voting hook '" + winningHook.getId() + "': " + e.getMessage(), e);
+            logger.log(Level.SEVERE, gameInstanceContext + " Error applying voting hook '" + winningHook.getId() + "': " + e.getMessage(), e);
             game.broadcastToGamePlayers(ChatColor.RED + "An error occurred while activating the event.");
+            game.setActiveVotingHook(null);
         }
 
         currentVoteOptions.clear();
@@ -228,10 +219,11 @@ public class VoteManager {
     }
 
     private void playVoteStartSoundToPlayers() {
+        // GameInstance should have getPlayersInGame()
         for (UUID uuid : game.getPlayersInGame()) {
             Player p = Bukkit.getPlayer(uuid);
             if (p != null) {
-                p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 1.0f, 1.2f);
+                p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, SoundCategory.PLAYERS, 1.0f, 1.2f);
             }
         }
     }
@@ -239,7 +231,7 @@ public class VoteManager {
         for (UUID uuid : game.getPlayersInGame()) {
             Player p = Bukkit.getPlayer(uuid);
             if (p != null) {
-                p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 0.8f, 1.0f);
+                p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, SoundCategory.PLAYERS, 0.8f, 1.0f);
             }
         }
     }

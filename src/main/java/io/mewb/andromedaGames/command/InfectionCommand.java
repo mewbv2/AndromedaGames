@@ -1,10 +1,12 @@
 package io.mewb.andromedaGames.command;
 
 import io.mewb.andromedaGames.AndromedaGames;
-import io.mewb.andromedaGames.game.Game;
+import io.mewb.andromedaGames.arena.ArenaDefinition; // For finding compatible arenas
+import io.mewb.andromedaGames.game.GameDefinition;
+import io.mewb.andromedaGames.game.GameInstance;
 import io.mewb.andromedaGames.game.GameManager;
 import io.mewb.andromedaGames.game.GameState;
-import io.mewb.andromedaGames.infection.InfectionGame; // Import InfectionGame
+import io.mewb.andromedaGames.infection.InfectionGame; // This is our InfectionGameInstance (extends GameInstance)
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -18,16 +20,20 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 public class InfectionCommand implements CommandExecutor, TabCompleter {
 
     private final AndromedaGames plugin;
     private final GameManager gameManager;
+    private final Logger logger;
 
     public InfectionCommand(AndromedaGames plugin, GameManager gameManager) {
         this.plugin = plugin;
         this.gameManager = gameManager;
+        this.logger = plugin.getLogger();
     }
 
     @Override
@@ -41,19 +47,16 @@ public class InfectionCommand implements CommandExecutor, TabCompleter {
         String[] subArgs = args.length > 1 ? Arrays.copyOfRange(args, 1, args.length) : new String[0];
 
         switch (subCommand) {
-            // Player commands
             case "join":
                 return handleJoin(sender, subArgs);
             case "leave":
                 return handleLeave(sender, subArgs);
             case "list":
                 return handleList(sender, subArgs);
-            // Admin commands
-            case "start":
-                return handleAdminStart(sender, subArgs);
-            case "stop":
-                return handleAdminStop(sender, subArgs);
-            // Add more admin commands like setspawn, setlobby etc. later if needed
+            case "startinstance":
+                return handleAdminStartInstance(sender, subArgs);
+            case "stopinstance":
+                return handleAdminStopInstance(sender, subArgs);
             default:
                 sender.sendMessage(ChatColor.RED + "Unknown Infection subcommand: " + ChatColor.YELLOW + subCommand);
                 sendBaseInfectionHelp(sender);
@@ -64,27 +67,52 @@ public class InfectionCommand implements CommandExecutor, TabCompleter {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         final List<String> completions = new ArrayList<>();
-        List<String> subcommands = new ArrayList<>(Arrays.asList("join", "leave", "list"));
+        List<String> baseSubcommands = new ArrayList<>(Arrays.asList("join", "leave", "list"));
+        List<String> adminSubcommands = new ArrayList<>();
 
-        // Check for a general admin permission for infection games
         if (sender.hasPermission("andromedagames.admin.infection.manage")) {
-            subcommands.addAll(Arrays.asList("start", "stop"));
+            adminSubcommands.addAll(Arrays.asList("startinstance", "stopinstance"));
         }
 
-        if (args.length == 1) { // Tab completing the subcommand itself
-            StringUtil.copyPartialMatches(args[0], subcommands, completions);
-        } else if (args.length >= 2) { // Tab completing arguments for a subcommand
+        if (args.length == 1) {
+            StringUtil.copyPartialMatches(args[0], baseSubcommands, completions);
+            StringUtil.copyPartialMatches(args[0], adminSubcommands, completions);
+        } else if (args.length >= 2) {
             String subCommand = args[0].toLowerCase();
-            // Arguments for game-specific commands (join, start, stop)
-            if (Arrays.asList("join", "start", "stop").contains(subCommand)) {
-                if (args.length == 2) { // Expecting gameId as the first argument
-                    // Filter for InfectionGame IDs
-                    List<String> infectionGameIds = gameManager.getAllGames().stream()
-                            .filter(InfectionGame.class::isInstance)
-                            .map(Game::getGameId)
-                            .collect(Collectors.toList());
-                    StringUtil.copyPartialMatches(args[1], infectionGameIds, completions);
-                }
+            List<String> infectionDefinitionIds = gameManager.getAllGameDefinitions().stream()
+                    .filter(def -> "INFECTION".equalsIgnoreCase(def.getGameType()))
+                    .map(GameDefinition::getDefinitionId)
+                    .collect(Collectors.toList());
+
+            List<String> runningInfectionInstanceIdPrefixes = gameManager.getRunningInstances().stream()
+                    .filter(inst -> inst.getDefinition().getGameType().equalsIgnoreCase("INFECTION"))
+                    .map(inst -> inst.getInstanceId().toString().substring(0, 8)) // Shortened UUID
+                    .collect(Collectors.toList());
+
+            switch (subCommand) {
+                case "join":
+                case "startinstance":
+                    if (args.length == 2) { // Suggest Infection definitionId
+                        StringUtil.copyPartialMatches(args[1], infectionDefinitionIds, completions);
+                    } else if (subCommand.equals("startinstance") && args.length == 3) { // Suggest arenaId for startinstance
+                        String chosenDefId = args[1];
+                        Optional<GameDefinition> defOpt = gameManager.getGameDefinition(chosenDefId);
+                        if (defOpt.isPresent()) {
+                            GameDefinition chosenDef = defOpt.get();
+                            List<String> compatibleArenaIds = gameManager.getAllArenaDefinitions().stream()
+                                    .filter(arenaDef -> arenaDef.getTags().stream()
+                                            .anyMatch(tag -> chosenDef.getCompatibleArenaTags().contains(tag) || chosenDef.getCompatibleArenaTags().isEmpty()))
+                                    .map(ArenaDefinition::getArenaId)
+                                    .collect(Collectors.toList());
+                            StringUtil.copyPartialMatches(args[2], compatibleArenaIds, completions);
+                        }
+                    }
+                    break;
+                case "stopinstance":
+                    if (args.length == 2) { // Suggest running Infection instanceId (shortened prefix)
+                        StringUtil.copyPartialMatches(args[1], runningInfectionInstanceIdPrefixes, completions);
+                    }
+                    break;
             }
         }
         Collections.sort(completions);
@@ -94,21 +122,19 @@ public class InfectionCommand implements CommandExecutor, TabCompleter {
     private void sendBaseInfectionHelp(CommandSender sender) {
         sender.sendMessage(ChatColor.DARK_RED + "" + ChatColor.BOLD + "--- Infection Commands ---");
         if (sender.hasPermission("andromedagames.player.infection.join")) {
-            sender.sendMessage(ChatColor.YELLOW + "/infection join <gameId>" + ChatColor.GRAY + " - Joins an Infection game.");
+            sender.sendMessage(ChatColor.YELLOW + "/infection join <definitionId>" + ChatColor.GRAY + " - Joins an available Infection game match.");
         }
         if (sender.hasPermission("andromedagames.player.infection.leave")) {
-            sender.sendMessage(ChatColor.YELLOW + "/infection leave" + ChatColor.GRAY + " - Leaves your current Infection game.");
+            sender.sendMessage(ChatColor.YELLOW + "/infection leave" + ChatColor.GRAY + " - Leaves your current game match.");
         }
-        sender.sendMessage(ChatColor.YELLOW + "/infection list" + ChatColor.GRAY + " - Lists available Infection games.");
+        sender.sendMessage(ChatColor.YELLOW + "/infection list" + ChatColor.GRAY + " - Lists Infection game types and active matches.");
 
         if (sender.hasPermission("andromedagames.admin.infection.manage")) {
             sender.sendMessage(ChatColor.RED + "Admin Infection Commands:");
-            sender.sendMessage(ChatColor.YELLOW + "/infection start <gameId>" + ChatColor.GRAY + " - Force starts an Infection game.");
-            sender.sendMessage(ChatColor.YELLOW + "/infection stop <gameId>" + ChatColor.GRAY + " - Force stops an Infection game.");
+            sender.sendMessage(ChatColor.YELLOW + "/infection startinstance <definitionId> [arenaId]" + ChatColor.GRAY + " - Starts a new Infection match.");
+            sender.sendMessage(ChatColor.YELLOW + "/infection stopinstance <instanceId_prefix>" + ChatColor.GRAY + " - Stops a running Infection match.");
         }
     }
-
-    // --- Player Command Handlers ---
 
     private boolean handleJoin(CommandSender sender, String[] args) {
         if (!(sender instanceof Player)) {
@@ -121,25 +147,64 @@ public class InfectionCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         if (args.length < 1) {
-            player.sendMessage(ChatColor.RED + "Usage: /infection join <gameId>");
+            player.sendMessage(ChatColor.RED + "Usage: /infection join <definitionId>");
             return true;
         }
-        String gameId = args[0];
+        String definitionId = args[0];
+        logger.finer("[InfectionCommand] Player " + player.getName() + " attempting to join Infection definition: " + definitionId);
 
-        if (gameManager.isPlayerInAnyGame(player)) {
-            player.sendMessage(ChatColor.RED + "You are already in a game. Type " + ChatColor.YELLOW + "/infection leave" + ChatColor.RED + " or the equivalent for your current game first.");
+        if (gameManager.isPlayerInAnyInstance(player)) {
+            player.sendMessage(ChatColor.RED + "You are already in a game.");
             return true;
         }
 
-        Optional<Game> gameOpt = gameManager.getGame(gameId);
-        if (gameOpt.isPresent() && gameOpt.get() instanceof InfectionGame) {
-            InfectionGame infectionGame = (InfectionGame) gameOpt.get();
-            if (!infectionGame.addPlayer(player)) {
-                // Failure message should be sent by InfectionGame.addPlayer()
-            }
-            // Success message is also sent by InfectionGame.addPlayer()
+        Optional<GameDefinition> defOpt = gameManager.getGameDefinition(definitionId);
+        if (defOpt.isEmpty() || !defOpt.get().getGameType().equalsIgnoreCase("INFECTION")) {
+            player.sendMessage(ChatColor.RED + "Infection game definition '" + definitionId + "' not found.");
+            return true;
+        }
+        GameDefinition definition = defOpt.get();
+
+        Optional<GameInstance> targetInstanceOpt = gameManager.getRunningInstances().stream()
+                .filter(inst -> inst.getDefinition().getDefinitionId().equalsIgnoreCase(definitionId) &&
+                        inst.getGameState() == GameState.WAITING &&
+                        inst.getPlayerCount() < definition.getRule("max_players", 20)) // Example max_players rule
+                .findFirst();
+
+        GameInstance targetInstance;
+        if (targetInstanceOpt.isPresent()) {
+            targetInstance = targetInstanceOpt.get();
+            logger.info("Found existing waiting Infection instance " + targetInstance.getInstanceId().toString().substring(0,8) + " for definition " + definitionId);
         } else {
-            player.sendMessage(ChatColor.RED + "Infection game '" + gameId + "' not found or is not an Infection game type.");
+            logger.info("No waiting Infection instance found for " + definitionId + ". Attempting to create a new one.");
+            Optional<ArenaDefinition> arenaOpt = gameManager.getAllArenaDefinitions().stream()
+                    .filter(ad -> ad.getTags().stream().anyMatch(tag -> definition.getCompatibleArenaTags().contains(tag) || definition.getCompatibleArenaTags().isEmpty()))
+                    .findFirst();
+
+            if (arenaOpt.isEmpty()) {
+                player.sendMessage(ChatColor.RED + "No compatible arenas available to start a new '" + definition.getDisplayName() + "' match.");
+                logger.warning("Could not create instance for Infection definition '" + definitionId + "': No compatible arenas found.");
+                return true;
+            }
+            String arenaIdToUse = arenaOpt.get().getArenaId();
+            logger.info("Selected arena '" + arenaIdToUse + "' for new Infection instance of definition '" + definitionId + "'.");
+
+            Optional<GameInstance> newInstanceOpt = gameManager.createGameInstance(definitionId, arenaIdToUse);
+            if (newInstanceOpt.isPresent()) {
+                targetInstance = newInstanceOpt.get();
+            } else {
+                player.sendMessage(ChatColor.RED + "Failed to create a new Infection match for '" + definition.getDisplayName() + "'.");
+                logger.severe("Failed to create game instance for Infection definition '" + definitionId + "' with arena '" + arenaIdToUse + "'.");
+                return true;
+            }
+        }
+
+        if (targetInstance != null) {
+            if (!gameManager.addPlayerToInstance(player, targetInstance.getInstanceId())) {
+                logger.warning("[InfectionCommand] Failed to add " + player.getName() + " to instance " + targetInstance.getInstanceId().toString().substring(0,8));
+            }
+        } else {
+            player.sendMessage(ChatColor.RED + "Could not find or create a suitable Infection match for '" + definition.getDisplayName() + "'.");
         }
         return true;
     }
@@ -151,91 +216,119 @@ public class InfectionCommand implements CommandExecutor, TabCompleter {
         }
         Player player = (Player) sender;
         if (!player.hasPermission("andromedagames.player.infection.leave")) {
-            player.sendMessage(ChatColor.RED + "You do not have permission to leave Infection games.");
+            player.sendMessage(ChatColor.RED + "You do not have permission to leave games.");
             return true;
         }
-        // GameManager.removePlayerFromGame will call the specific game's removePlayer method.
-        if (!gameManager.removePlayerFromGame(player)) {
-            player.sendMessage(ChatColor.RED + "You are not currently in an Infection game.");
+        if (!gameManager.removePlayerFromInstance(player)) {
+            player.sendMessage(ChatColor.RED + "You are not currently in an Infection game match.");
         }
-        // Success/failure message is typically sent by InfectionGame.removePlayer()
         return true;
     }
 
     private boolean handleList(CommandSender sender, String[] args) {
-        List<InfectionGame> infectionGames = gameManager.getAllGames().stream()
-                .filter(InfectionGame.class::isInstance)
-                .map(InfectionGame.class::cast)
+        sender.sendMessage(ChatColor.DARK_RED + "" + ChatColor.BOLD + "--- Available Infection Game Definitions ---");
+        List<GameDefinition> infectionDefinitions = gameManager.getAllGameDefinitions().stream()
+                .filter(def -> "INFECTION".equalsIgnoreCase(def.getGameType()))
+                .collect(Collectors.toList());
+        if (infectionDefinitions.isEmpty()){
+            sender.sendMessage(ChatColor.GRAY+"No Infection game types defined.");
+        } else {
+            infectionDefinitions.forEach(def -> sender.sendMessage(ChatColor.YELLOW + def.getDefinitionId() + ChatColor.GRAY + " - " + def.getDisplayName()));
+        }
+
+        sender.sendMessage(ChatColor.DARK_RED + "" + ChatColor.BOLD + "--- Running Infection Matches ---");
+        List<GameInstance> runningInfectionInstances = gameManager.getRunningInstances().stream()
+                .filter(inst -> inst.getDefinition().getGameType().equalsIgnoreCase("INFECTION"))
                 .collect(Collectors.toList());
 
-        if (infectionGames.isEmpty()) {
-            sender.sendMessage(ChatColor.YELLOW + "No Infection games are currently available or defined.");
-            return true;
-        }
-        sender.sendMessage(ChatColor.DARK_RED + "" + ChatColor.BOLD + "--- Available Infection Games ---");
-        for (InfectionGame game : infectionGames) {
-            sender.sendMessage(String.format("%s%s %s- State: %s%s %s- Players: %s%d",
-                    ChatColor.AQUA, game.getGameId(), ChatColor.GRAY,
-                    ChatColor.YELLOW, game.getGameState().name(), ChatColor.GRAY,
-                    ChatColor.LIGHT_PURPLE, game.getPlayerCount()));
+        if (runningInfectionInstances.isEmpty()) {
+            sender.sendMessage(ChatColor.GRAY + "No Infection matches currently running.");
+        } else {
+            for (GameInstance instance : runningInfectionInstances) {
+                sender.sendMessage(String.format("%s%s %s(ID: %s) %s- State: %s%s %s- Players: %s%d",
+                        ChatColor.AQUA, instance.getDefinition().getDisplayName(),
+                        ChatColor.DARK_AQUA, instance.getInstanceId().toString().substring(0, 8),
+                        ChatColor.GRAY,
+                        ChatColor.YELLOW, instance.getGameState().name(),
+                        ChatColor.GRAY,
+                        ChatColor.LIGHT_PURPLE, instance.getPlayerCount()
+                ));
+            }
         }
         return true;
     }
 
-    // --- Admin Command Handlers ---
-
-    private boolean handleAdminStart(CommandSender sender, String[] args) {
-        if (!sender.hasPermission("andromedagames.admin.infection.start")) {
-            sender.sendMessage(ChatColor.RED + "You do not have permission to force start Infection games.");
+    private boolean handleAdminStartInstance(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("andromedagames.admin.infection.manage")) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to start Infection instances.");
             return true;
         }
         if (args.length < 1) {
-            sender.sendMessage(ChatColor.RED + "Usage: /infection start <gameId>");
+            sender.sendMessage(ChatColor.RED + "Usage: /infection startinstance <definitionId> [arenaId]");
             return true;
         }
-        String gameId = args[0];
-        Optional<Game> gameOpt = gameManager.getGame(gameId);
+        String definitionId = args[0];
+        String arenaId = (args.length > 1) ? args[1] : null;
 
-        if (gameOpt.isPresent() && gameOpt.get() instanceof InfectionGame) {
-            InfectionGame infectionGame = (InfectionGame) gameOpt.get();
-            if (infectionGame.getGameState() == GameState.WAITING || infectionGame.getGameState() == GameState.ENDING) {
-                // Call the start method that allows bypassing player check
-                if (infectionGame.start(true)) { // true to bypass min player check
-                    sender.sendMessage(ChatColor.GREEN + "Infection game '" + gameId + "' has been force-started (bypassing player check).");
+        Optional<GameDefinition> defOpt = gameManager.getGameDefinition(definitionId);
+        if(defOpt.isEmpty() || !defOpt.get().getGameType().equalsIgnoreCase("INFECTION")){
+            sender.sendMessage(ChatColor.RED + "Infection Game Definition '" + definitionId + "' not found.");
+            return true;
+        }
+        GameDefinition definition = defOpt.get();
+
+        if (arenaId == null) {
+            Optional<ArenaDefinition> compatibleArenaOpt = gameManager.getAllArenaDefinitions().stream()
+                    .filter(ad -> ad.getTags().stream().anyMatch(tag -> definition.getCompatibleArenaTags().contains(tag) || definition.getCompatibleArenaTags().isEmpty()))
+                    .findFirst();
+            if (compatibleArenaOpt.isPresent()) {
+                arenaId = compatibleArenaOpt.get().getArenaId();
+                sender.sendMessage(ChatColor.YELLOW + "Auto-selected arena: " + arenaId);
+            } else {
+                sender.sendMessage(ChatColor.RED + "No compatible arena found for definition '" + definitionId + "'. Please specify an arena ID.");
+                return true;
+            }
+        }
+
+        Optional<GameInstance> instanceOpt = gameManager.createGameInstance(definitionId, arenaId);
+        if (instanceOpt.isPresent()) {
+            GameInstance instance = instanceOpt.get();
+            if (instance.getGameState() == GameState.WAITING) {
+                if (instance.start(true)) {
+                    sender.sendMessage(ChatColor.GREEN + "New Infection instance of '" + definition.getDisplayName() + "' on arena '" + arenaId + "' created and force-started (ID: " + instance.getInstanceId().toString().substring(0,8) + ").");
                 } else {
-                    sender.sendMessage(ChatColor.RED + "Could not start Infection game '" + gameId + "'. It might need more players (even if forced) or have other issues (check console).");
+                    sender.sendMessage(ChatColor.YELLOW + "Infection instance '" + definition.getDisplayName() + "' created (ID: " + instance.getInstanceId().toString().substring(0,8) + ") but failed to start. It is in " + instance.getGameState() + " state.");
                 }
             } else {
-                sender.sendMessage(ChatColor.RED + "Infection game '" + gameId + "' is already " + infectionGame.getGameState().name().toLowerCase() + " or cannot be started from this state.");
+                sender.sendMessage(ChatColor.YELLOW + "Infection instance '" + definition.getDisplayName() + "' created (ID: " + instance.getInstanceId().toString().substring(0,8) + ") but is already in state " + instance.getGameState() + ". Not attempting to start.");
             }
         } else {
-            sender.sendMessage(ChatColor.RED + "Infection game '" + gameId + "' not found.");
+            sender.sendMessage(ChatColor.RED + "Failed to create Infection instance for definition '" + definitionId + "' on arena '" + arenaId + "'. Check console for errors.");
         }
         return true;
     }
 
-    private boolean handleAdminStop(CommandSender sender, String[] args) {
-        if (!sender.hasPermission("andromedagames.admin.infection.stop")) {
-            sender.sendMessage(ChatColor.RED + "You do not have permission to force stop Infection games.");
+    private boolean handleAdminStopInstance(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("andromedagames.admin.infection.manage")) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to stop Infection instances.");
             return true;
         }
         if (args.length < 1) {
-            sender.sendMessage(ChatColor.RED + "Usage: /infection stop <gameId>");
+            sender.sendMessage(ChatColor.RED + "Usage: /infection stopinstance <instanceId_prefix>");
             return true;
         }
-        String gameId = args[0];
-        Optional<Game> gameOpt = gameManager.getGame(gameId);
+        String instanceIdPrefix = args[0].toLowerCase();
+        Optional<GameInstance> instanceOpt = gameManager.getRunningInstances().stream()
+                .filter(inst -> inst.getDefinition().getGameType().equalsIgnoreCase("INFECTION") &&
+                        inst.getInstanceId().toString().toLowerCase().startsWith(instanceIdPrefix))
+                .findFirst();
 
-        if (gameOpt.isPresent() && gameOpt.get() instanceof InfectionGame) {
-            InfectionGame infectionGame = (InfectionGame) gameOpt.get();
-            if (infectionGame.getGameState() == GameState.ACTIVE || infectionGame.getGameState() == GameState.STARTING) {
-                infectionGame.stop(true); // Force stop
-                sender.sendMessage(ChatColor.GREEN + "Infection game '" + gameId + "' has been force-stopped.");
-            } else {
-                sender.sendMessage(ChatColor.RED + "Infection game '" + gameId + "' is not currently running or starting. Current state: " + infectionGame.getGameState().name());
-            }
+        if (instanceOpt.isPresent()) {
+            GameInstance instance = instanceOpt.get();
+            gameManager.endGameInstance(instance.getInstanceId());
+            sender.sendMessage(ChatColor.GREEN + "Infection instance " + instance.getDefinition().getDisplayName() + " (ID starting with " + instanceIdPrefix + ") has been stopped.");
         } else {
-            sender.sendMessage(ChatColor.RED + "Infection game '" + gameId + "' not found.");
+            sender.sendMessage(ChatColor.RED + "No running Infection instance found with ID starting with '" + instanceIdPrefix + "'.");
         }
         return true;
     }

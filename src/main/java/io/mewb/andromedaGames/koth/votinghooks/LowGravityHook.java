@@ -1,6 +1,6 @@
 package io.mewb.andromedaGames.koth.votinghooks;
 
-import io.mewb.andromedaGames.game.Game;
+import io.mewb.andromedaGames.game.GameInstance;
 import io.mewb.andromedaGames.koth.KoTHGame;
 import io.mewb.andromedaGames.voting.VotingHook;
 import org.bukkit.Bukkit;
@@ -35,7 +35,7 @@ public class LowGravityHook implements VotingHook {
     }
 
     @Override
-    public void apply(Game game, List<Player> voters) {
+    public void apply(GameInstance game, List<Player> voters) {
         if (!(game instanceof KoTHGame)) {
             return;
         }

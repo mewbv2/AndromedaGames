@@ -1,6 +1,6 @@
 package io.mewb.andromedaGames.voting;
 
-import io.mewb.andromedaGames.game.Game; // So the hook can interact with the game
+import io.mewb.andromedaGames.game.GameInstance;
 import org.bukkit.entity.Player;
 
 import java.util.List;
@@ -34,7 +34,7 @@ public interface VotingHook {
      * @param game The game instance to which the hook's effect should be applied.
      * @param voters (Optional) A list of players who voted for this option, if needed by the hook.
      */
-    void apply(Game game, List<Player> voters);
+    void apply(GameInstance game, List<Player> voters);
 
     /**
      * (Optional) Checks if this voting hook can currently be applied to the given game.
@@ -43,7 +43,7 @@ public interface VotingHook {
      * @param game The game instance to check against.
      * @return True if the hook can be applied, false otherwise. Defaults to true.
      */
-    default boolean canApply(Game game) {
+    default boolean canApply(GameInstance game) {
         return true;
     }
 

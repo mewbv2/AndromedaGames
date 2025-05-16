@@ -1,0 +1,53 @@
+# File: plugins/AndromedaGames/games/capturetheshard/cts_example_arena.yml
+
+game_id: "cts_example_arena"
+game_type: "CAPTURE_THE_SHARD" # This is important for GameManager to identify the game type
+enabled: true
+world: "world" # IMPORTANT: Replace with a valid, loaded world name on your server
+
+arena:
+  schematic_name: "cts_default_map" # Example schematic name in plugins/AndromedaGames/schematics/
+  paste_location:
+    x: 0.0
+    y: 64.0
+    z: 0.0
+
+capture_the_shard_settings:
+  game_duration_seconds: 600 # 10 minutes
+  captures_to_win: 3
+  min_players_per_team: 1 # Minimum players needed on each team to start (e.g., 1 for testing, 2+ for real games)
+  max_players_per_team: 8
+  countdown_seconds: 20
+  shard_material: "BEACON" # Material name for the shard (e.g., BEACON, DIAMOND_BLOCK)
+  gameplay_gamemode: "SURVIVAL" # Or ADVENTURE
+  scoreboard_title: "&1&lCapture &c&lThe &f&lShard"
+
+  teams:
+    RED:
+      display_name: "&cRed Team"
+      chat_color: "RED" # Bukkit ChatColor name
+      shard_pedestal_location: { world: "%world%", x: 50.5, y: 65.0, z: 0.5 } # %world% will be replaced by the global world
+      capture_point_location:  { world: "%world%", x: 50.5, y: 65.0, z: 2.5 } # Example: near pedestal
+      player_spawn_points:
+        - { world: "%world%", x: 45.5, y: 66.0, z: 0.5, yaw: -90, pitch: 0 }
+        - { world: "%world%", x: 45.5, y: 66.0, z: 2.5, yaw: -90, pitch: 0 }
+    BLUE:
+      display_name: "&9Blue Team"
+      chat_color: "BLUE"
+      shard_pedestal_location: { world: "%world%", x: -50.5, y: 65.0, z: 0.5 }
+      capture_point_location:  { world: "%world%", x: -50.5, y: 65.0, z: 2.5 }
+      player_spawn_points:
+        - { world: "%world%", x: -45.5, y: 66.0, z: 0.5, yaw: 90, pitch: 0 }
+        - { world: "%world%", x: -45.5, y: 66.0, z: 2.5, yaw: 90, pitch: 0 }
+
+spawns: # General lobby for players before team assignment or after game
+  lobby: { world: "%world%", x: 0.5, y: 70.0, z: -20.5, yaw: 0, pitch: 0 }
+
+# Voting hook settings (can be added later for CTS)
+# voting:
+#   enabled: false
+#   interval_seconds: 120
+#   duration_seconds: 20
+#   hooks_available:
+#     - "cts_team_speed_boost"
+#     - "cts_enemy_shard_reveal"

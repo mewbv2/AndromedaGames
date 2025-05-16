@@ -1,17 +1,20 @@
 package io.mewb.andromedaGames.koth;
 
 import io.mewb.andromedaGames.AndromedaGames;
-import io.mewb.andromedaGames.game.Game;
+import io.mewb.andromedaGames.arena.ArenaDefinition;
+import io.mewb.andromedaGames.game.GameDefinition;
+import io.mewb.andromedaGames.game.GameInstance;
 import io.mewb.andromedaGames.game.GameState;
-import io.mewb.andromedaGames.koth.votinghooks.HillZoneShrinkHook; // New Hook
-import io.mewb.andromedaGames.koth.votinghooks.LaunchPadsHook;   // New Hook
+import io.mewb.andromedaGames.koth.votinghooks.HillZoneShrinkHook;
+import io.mewb.andromedaGames.koth.votinghooks.LaunchPadsHook;
 import io.mewb.andromedaGames.koth.votinghooks.LowGravityHook;
-import io.mewb.andromedaGames.koth.votinghooks.PlayerSwapHook;   // New Hook
+import io.mewb.andromedaGames.koth.votinghooks.PlayerSwapHook;
 import io.mewb.andromedaGames.koth.votinghooks.TntDropHook;
-import io.mewb.andromedaGames.player.PlayerStateManager;
+// PlayerStateManager is inherited from GameInstance
 import io.mewb.andromedaGames.utils.GameScoreboard;
-import io.mewb.andromedaGames.utils.LocationUtil;
+// LocationUtil might not be directly needed if using RelativeLocation resolution from GameInstance
 import io.mewb.andromedaGames.utils.ParticleUtil;
+// RelativeLocation is used by GameInstance's getAbsoluteLocation helper
 import io.mewb.andromedaGames.voting.VoteManager;
 import io.mewb.andromedaGames.voting.VotingHook;
 import net.md_5.bungee.api.ChatMessageType;
@@ -24,8 +27,7 @@ import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.SoundCategory;
 import org.bukkit.World;
-import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.configuration.ConfigurationSection; // For parsing voting config from GameDefinition
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -41,185 +43,133 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Level;
 
-public class KoTHGame extends Game {
+public class KoTHGame extends GameInstance {
 
-    // Game parameters
-    private Location hillCenter;
-    private int hillRadius; // Current operational hill radius
-    private int originalHillRadius; // Stores the configured hill radius before any temporary changes
-    private int hillRadiusSquared; // Current operational hill radius squared
+    // Game parameters - now mostly from GameDefinition and ArenaDefinition
+    private Location absoluteHillCenter;
+    private int currentHillRadius;
+    private int originalHillRadius; // From definition's rules
+    private int currentHillRadiusSquared;
+
     private int gameDurationSeconds;
     private int timeElapsedSeconds;
     private int minPlayersToStart;
     private int countdownSeconds;
+    private GameMode gameplayGamemode;
+    private String scoreboardTitle;
 
-    // Arena details
-    private String arenaSchematicName;
-    private Location arenaPasteLocation;
-    private Location lobbySpawn;
-    private List<Location> gameSpawns;
-    private String worldName;
+
+    // Arena details - from ArenaDefinition + instanceBaseWorldLocation
+    private Location absoluteLobbySpawn;
+    private List<Location> absoluteGameSpawns;
 
     // Game state tracking
     private final Map<UUID, Integer> playerScores;
     private BukkitTask gameTickTask;
     private BukkitTask countdownTask;
-    private FileConfiguration gameConfig;
     private UUID playerCurrentlyOnHill = null;
 
-    // Scoreboard Management
-    private final Map<UUID, GameScoreboard> playerScoreboards = new HashMap<>();
-    private String scoreboardTitle;
 
-    // Voting System
-    private VoteManager voteManager;
-    private List<VotingHook> availableVotingHooks;
-    private List<String> configuredHookIds;
-    private boolean votingEnabled;
-    private int voteIntervalSeconds;
-    private int voteEventDurationSeconds;
-    private long lastVoteTriggerTimeMillis;
-    private final Random random = new Random();
-    private VotingHook activeVotingHook = null;
-    private long activeHookEndTimeMillis = 0;
-
-    // Player State Management
-    private final PlayerStateManager playerStateManager;
-    private GameMode gamePlayGamemode = GameMode.SURVIVAL;
-
-
-    public KoTHGame(AndromedaGames plugin, String gameId, String arenaId) {
-        super(plugin, gameId, arenaId);
-        this.playerStateManager = plugin.getPlayerStateManager();
+    public KoTHGame(AndromedaGames plugin, UUID instanceId, GameDefinition definition, ArenaDefinition arena, Location instanceBaseWorldLocation) {
+        super(plugin, instanceId, definition, arena, instanceBaseWorldLocation);
         this.playersInGame = new HashSet<>();
         this.playerScores = new HashMap<>();
-        this.gameSpawns = new ArrayList<>();
-        this.availableVotingHooks = new ArrayList<>();
-        this.configuredHookIds = new ArrayList<>();
-        this.gameState = GameState.UNINITIALIZED;
+        this.absoluteGameSpawns = new ArrayList<>();
+        this.availableVotingHooks = new ArrayList<>(); // Inherited from GameInstance
+        // Fields will be set in setupInstance()
     }
 
-    public void configure(FileConfiguration config) {
-        this.gameConfig = config;
-        this.logger.info("Configuring KoTH game: " + gameId + " (Arena ID/Schematic: " + arenaId + ")");
+    @Override
+    public void setupInstance() {
+        this.logger.info("[KoTHInstance:" + instanceId.toString().substring(0,8) + "] Setting up with definition '" + definition.getDefinitionId() + "' and arena '" + arena.getArenaId() + "'.");
 
-        if (!config.getBoolean("enabled", false)) {
-            this.logger.warning("KoTH game '" + gameId + "' is marked as disabled. Aborting configuration.");
-            setGameState(GameState.DISABLED); return;
-        }
-        this.worldName = config.getString("world");
-        if (this.worldName == null || this.worldName.isEmpty()) {
-            this.logger.severe("World name not specified for KoTH game '" + gameId + "'. Disabling game.");
-            setGameState(GameState.DISABLED); return;
-        }
-        World gameWorld = Bukkit.getWorld(worldName);
-        if (gameWorld == null) {
-            this.logger.severe("World '" + worldName + "' not found for KoTH game " + gameId + ". Disabling game.");
-            setGameState(GameState.DISABLED); return;
-        }
-
-        this.arenaSchematicName = config.getString("arena.schematic_name", this.arenaId);
-        this.arenaPasteLocation = LocationUtil.loadLocation(config.getConfigurationSection("arena.paste_location"), gameWorld, this.logger);
-        if (this.arenaSchematicName != null && !this.arenaSchematicName.isEmpty() && this.arenaPasteLocation != null) {
-            if (!plugin.getArenaManager().pasteSchematic(this.arenaSchematicName, this.arenaPasteLocation)) {
-                this.logger.severe("Failed to paste arena schematic '" + this.arenaSchematicName + "'. Disabling game.");
-                setGameState(GameState.DISABLED); return;
-            }
-            this.logger.info("Arena '" + this.arenaSchematicName + "' loaded for game " + gameId);
-        } else if (this.arenaSchematicName != null && !this.arenaSchematicName.isEmpty()) {
-            this.logger.severe("Arena schematic name is set for " + gameId + " but paste location is not. Disabling game.");
-            setGameState(GameState.DISABLED); return;
-        } else {
-            this.logger.warning("Arena schematic not specified or paste location missing for " + gameId + ". Assuming pre-built arena.");
-        }
-
-        ConfigurationSection kothSettings = config.getConfigurationSection("koth_settings");
-        if (kothSettings == null) { this.logger.severe("Missing 'koth_settings' for " + gameId + ". Disabling."); setGameState(GameState.DISABLED); return; }
-        this.hillCenter = LocationUtil.loadLocation(kothSettings.getConfigurationSection("hill_center"), gameWorld, this.logger);
-
-        this.originalHillRadius = kothSettings.getInt("hill_radius", 5); // Load original radius
-        this.hillRadius = this.originalHillRadius; // Set current operational radius to original
-        this.hillRadiusSquared = this.hillRadius * this.hillRadius;
-
-        this.gameDurationSeconds = kothSettings.getInt("game_duration_seconds", 300);
-        this.minPlayersToStart = kothSettings.getInt("min_players_to_start", 2);
-        this.countdownSeconds = kothSettings.getInt("countdown_seconds", 10);
-        this.scoreboardTitle = ChatColor.translateAlternateColorCodes('&', kothSettings.getString("scoreboard_title", "&6&lKoTH: &e" + gameId));
+        // Load rules from GameDefinition
+        this.gameDurationSeconds = definition.getRule("game_duration_seconds", 300);
+        this.minPlayersToStart = definition.getRule("min_players_to_start", 2);
+        this.countdownSeconds = definition.getRule("countdown_seconds", 10);
+        this.originalHillRadius = definition.getRule("hill_radius", 5);
+        this.currentHillRadius = this.originalHillRadius;
+        this.currentHillRadiusSquared = this.currentHillRadius * this.currentHillRadius;
+        this.scoreboardTitle = ChatColor.translateAlternateColorCodes('&', definition.getRule("scoreboard_title", "&6&lKoTH: &e" + definition.getDisplayName()));
         try {
-            this.gamePlayGamemode = GameMode.valueOf(kothSettings.getString("gameplay_gamemode", "SURVIVAL").toUpperCase());
+            this.gameplayGamemode = GameMode.valueOf(definition.getRule("gameplay_gamemode", "SURVIVAL").toString().toUpperCase());
         } catch (IllegalArgumentException e) {
-            this.logger.warning("Invalid gameplay_gamemode '" + kothSettings.getString("gameplay_gamemode") + "' in config for " + gameId + ". Defaulting to SURVIVAL.");
-            this.gamePlayGamemode = GameMode.SURVIVAL;
+            this.logger.warning("Invalid gameplay_gamemode in definition for " + definition.getDefinitionId() + ". Defaulting to SURVIVAL.");
+            this.gameplayGamemode = GameMode.SURVIVAL;
         }
 
-        ConfigurationSection spawnsSection = config.getConfigurationSection("spawns");
-        if (spawnsSection == null) { this.logger.severe("Missing 'spawns' for " + gameId + ". Disabling."); setGameState(GameState.DISABLED); return; }
-        this.lobbySpawn = LocationUtil.loadLocation(spawnsSection.getConfigurationSection("lobby"), gameWorld, this.logger);
-        if (spawnsSection.contains("game_area")) {
-            this.gameSpawns = LocationUtil.loadLocationList(spawnsSection, "game_area", gameWorld, this.logger);
-        } else {
-            this.logger.warning("Spawn list 'spawns.game_area' is missing for game '" + gameId + "'. No game spawns loaded.");
-            this.gameSpawns = new ArrayList<>();
-        }
+        // Load locations from ArenaDefinition, making them absolute using helpers from GameInstance
+        this.absoluteHillCenter = getAbsoluteLocation("hill_center");
+        this.absoluteLobbySpawn = getAbsoluteLocation("lobby_spawn");
+        this.absoluteGameSpawns = getAbsoluteLocationList("game_spawns"); // Key "game_spawns" must be a list of relative locations
 
-        if (this.hillCenter == null || this.lobbySpawn == null || this.gameSpawns.isEmpty()) {
-            this.logger.severe("Critical locations (hill, lobby, or game spawns) missing/invalid for " + gameId + ". Disabling.");
+        if (this.absoluteHillCenter == null || this.absoluteHillCenter.equals(this.instanceBaseWorldLocation) && !"hill_center".equals(this.arena.getRelativeLocation("hill_center"))) {
+            this.logger.severe("Critical: Hill center could not be resolved for instance " + instanceId + " using arena " + arena.getArenaId() + ". Key 'hill_center' might be missing in arena definition. Disabling instance.");
+            setGameState(GameState.DISABLED); return;
+        }
+        if (this.absoluteLobbySpawn == null || this.absoluteLobbySpawn.equals(this.instanceBaseWorldLocation) && !"lobby_spawn".equals(this.arena.getRelativeLocation("lobby_spawn"))) {
+            this.logger.severe("Critical: Lobby spawn could not be resolved for instance " + instanceId + ". Key 'lobby_spawn' might be missing. Disabling instance.");
+            setGameState(GameState.DISABLED); return;
+        }
+        if (this.absoluteGameSpawns.isEmpty()) {
+            this.logger.severe("Critical: No game spawns could be resolved for instance " + instanceId + ". Key 'game_spawns' might be missing or empty in arena definition. Disabling instance.");
             setGameState(GameState.DISABLED); return;
         }
 
-        ConfigurationSection votingConfig = config.getConfigurationSection("voting");
-        if (votingConfig != null) {
-            this.votingEnabled = votingConfig.getBoolean("enabled", false);
-            this.voteIntervalSeconds = votingConfig.getInt("interval_seconds", 90);
-            this.voteEventDurationSeconds = votingConfig.getInt("duration_seconds", 20);
-            this.configuredHookIds = votingConfig.getStringList("hooks_available");
-            this.voteManager = new VoteManager(plugin, this);
-            initializeVotingHooks();
-            this.logger.info("Voting system configured for " + gameId + ": Enabled=" + votingEnabled + ", " + availableVotingHooks.size() + " hooks loaded.");
+        this.logger.info("[KoTHInstance:" + instanceId.toString().substring(0,8) + "] Hill Center: " + absoluteHillCenter.toString());
+        this.logger.info("[KoTHInstance:" + instanceId.toString().substring(0,8) + "] Lobby Spawn: " + absoluteLobbySpawn.toString());
+        for(Location l : absoluteGameSpawns) this.logger.finer("[KoTHInstance:" + instanceId.toString().substring(0,8) + "] Game Spawn: " + l.toString());
+
+        // Voting System Configuration from GameDefinition
+        ConfigurationSection votingConfigSection = definition.getVotingConfig();
+        if (votingConfigSection != null) {
+            this.votingEnabled = votingConfigSection.getBoolean("enabled", false); // Inherited field
+            this.voteIntervalSeconds = votingConfigSection.getInt("interval_seconds", 90); // Inherited
+            this.voteEventDurationSeconds = votingConfigSection.getInt("duration_seconds", 20); // Inherited
+            List<String> hookIdsFromDef = votingConfigSection.getStringList("hooks_available");
+            if (hookIdsFromDef != null) {
+                initializeVotingHooksFromDef(hookIdsFromDef); // Populates this.availableVotingHooks
+            }
+            if (this.votingEnabled && !this.availableVotingHooks.isEmpty()) {
+                this.voteManager = new VoteManager(plugin, this); // Inherited field, pass this GameInstance
+                this.logger.info("Voting system configured for KoTH instance " + instanceId.toString().substring(0,8) + ": Enabled=" + votingEnabled + ", " + availableVotingHooks.size() + " hooks loaded.");
+            } else {
+                this.votingEnabled = false;
+                this.logger.info("Voting system disabled for KoTH instance " + instanceId.toString().substring(0,8) + " (not enabled in def or no hooks).");
+            }
         } else {
             this.votingEnabled = false;
-            this.logger.info("No 'voting' configuration section for " + gameId + ". Voting disabled.");
+            this.logger.info("No 'default_voting_hooks' configuration section found for KoTH definition " + definition.getDefinitionId() + ". Voting will be disabled for instance " + instanceId.toString().substring(0,8));
         }
 
         if (this.gameState != GameState.DISABLED) {
             setGameState(GameState.WAITING);
-            this.logger.info("KoTH game '" + gameId + "' configured and ready. World: " + worldName);
+            this.logger.info("KoTH instance '" + instanceId.toString().substring(0,8) + "' (Def: " + definition.getDefinitionId() + ") setup complete and ready.");
         }
     }
 
-    private void initializeVotingHooks() {
-        availableVotingHooks.clear();
-        if (configuredHookIds == null) return;
-        for (String hookId : configuredHookIds) {
+    private void initializeVotingHooksFromDef(List<String> hookIds) {
+        availableVotingHooks.clear(); // inherited from GameInstance
+        if (hookIds == null) return;
+        for (String hookId : hookIds) {
             switch (hookId.toLowerCase()) {
                 case "koth_tnt_drop": availableVotingHooks.add(new TntDropHook()); break;
                 case "koth_low_gravity": availableVotingHooks.add(new LowGravityHook()); break;
                 case "koth_hill_shrink": availableVotingHooks.add(new HillZoneShrinkHook()); break;
                 case "koth_launch_pads": availableVotingHooks.add(new LaunchPadsHook()); break;
                 case "koth_player_swap": availableVotingHooks.add(new PlayerSwapHook()); break;
-                default: this.logger.warning("Unknown voting hook ID in config for " + gameId + ": " + hookId);
+                default: this.logger.warning("Unknown voting hook ID in GameDefinition " + definition.getDefinitionId() + ": " + hookId);
             }
         }
     }
 
     @Override
-    public void load() {
-        if (this.gameState == GameState.UNINITIALIZED) {
-            this.logger.warning("KoTHGame.load() called but game " + gameId + " is still UNINITIALIZED.");
-            if (this.gameConfig == null) {
-                FileConfiguration cfg = plugin.getConfigManager().getGameConfig("koth", this.gameId);
-                if (cfg != null) { this.configure(cfg); }
-                else { this.logger.severe("Could not retrieve config for " + gameId + ". Disabling."); setGameState(GameState.DISABLED); }
-            }
-        }
-    }
-
-    @Override
-    public void unload() {
-        this.logger.info("Unloading KoTH game: " + gameId);
+    public void cleanupInstance() {
+        this.logger.info("Cleaning up KoTH instance: " + instanceId.toString().substring(0,8));
         cancelTasks();
         playerScoreboards.values().forEach(GameScoreboard::destroy);
         playerScoreboards.clear();
+        // ArenaManager will handle arena reset/deletion based on instanceBaseWorldLocation
     }
 
     private void cancelTasks() {
@@ -230,39 +180,41 @@ public class KoTHGame extends Game {
         if (voteManager != null && voteManager.isVoteActive()) voteManager.endVote(false);
     }
 
+    @Override
     public boolean start(boolean bypassMinPlayerCheck) {
         if (gameState == GameState.DISABLED) {
-            this.logger.warning("Attempted to start KoTH game '" + gameId + "' but it is DISABLED.");
-            broadcastToGamePlayers(ChatColor.RED + "This game is currently disabled.");
+            this.logger.warning("Attempted to start KoTH instance '" + instanceId.toString().substring(0,8) + "' but it is DISABLED.");
             return false;
         }
         if (gameState != GameState.WAITING && gameState != GameState.ENDING) {
-            this.logger.warning("KoTH game " + gameId + " cannot start, current state: " + gameState); return false;
+            this.logger.warning("KoTH instance " + instanceId.toString().substring(0,8) + " cannot start, current state: " + gameState); return false;
         }
-        if (!bypassMinPlayerCheck && playersInGame.size() < minPlayersToStart) {
-            broadcastToGamePlayers(ChatColor.RED + "Not enough players to start! Need " + minPlayersToStart + ", have " + playersInGame.size() + ".");
-            if (bypassMinPlayerCheck) { this.logger.info("Admin bypassed min player check for " + gameId); }
+        // Get minPlayers from definition
+        int minPlayersRequired = definition.getRule("min_players_to_start", 2);
+
+        if (!bypassMinPlayerCheck && playersInGame.size() < minPlayersRequired) {
+            broadcastToGamePlayers(ChatColor.RED + "Not enough players to start! Need " + minPlayersRequired + ", have " + playersInGame.size() + ".");
+            if (bypassMinPlayerCheck) { this.logger.info("Admin bypassed min player check for instance " + instanceId.toString().substring(0,8)); }
             else { return false; }
         } else if (playersInGame.isEmpty() && !bypassMinPlayerCheck) {
             broadcastToGamePlayers(ChatColor.RED + "Cannot start with 0 players unless forced by an admin.");
-            if (bypassMinPlayerCheck) { this.logger.info("Admin starting game " + gameId + " with 0 players."); }
+            if (bypassMinPlayerCheck) { this.logger.info("Admin starting instance " + instanceId.toString().substring(0,8) + " with 0 players."); }
             else { return false; }
         }
 
         setGameState(GameState.STARTING);
         playerScores.clear();
         playerCurrentlyOnHill = null;
-        activeVotingHook = null;
-        activeHookEndTimeMillis = 0;
-        this.hillRadius = this.originalHillRadius; // Ensure hill radius is reset to original on game start
-        this.hillRadiusSquared = this.hillRadius * this.hillRadius;
-
+        activeVotingHook = null; // Inherited from GameInstance
+        activeHookEndTimeMillis = 0; // Inherited from GameInstance
+        this.currentHillRadius = this.originalHillRadius;
+        this.currentHillRadiusSquared = this.currentHillRadius * this.currentHillRadius;
 
         playersInGame.forEach(uuid -> {
             playerScores.put(uuid, 0);
             Player p = Bukkit.getPlayer(uuid);
             if (p != null) {
-                playerStateManager.clearPlayerForGame(p, this.gamePlayGamemode);
+                playerStateManager.clearPlayerForGame(p, this.gameplayGamemode);
                 GameScoreboard sb = playerScoreboards.get(uuid);
                 if (sb == null) {
                     sb = new GameScoreboard(p, scoreboardTitle);
@@ -273,27 +225,26 @@ public class KoTHGame extends Game {
             }
         });
         timeElapsedSeconds = 0;
-        lastVoteTriggerTimeMillis = System.currentTimeMillis();
+        if (this.votingEnabled && this.voteManager != null) { // Check inherited fields
+            lastVoteTriggerTimeMillis = System.currentTimeMillis();
+        }
 
         int spawnIndex = 0;
         for (UUID uuid : playersInGame) {
             Player player = Bukkit.getPlayer(uuid);
             if (player != null && player.isOnline()) {
-                if (!gameSpawns.isEmpty()) {
-                    player.teleport(gameSpawns.get(spawnIndex % gameSpawns.size())); spawnIndex++;
-                } else { this.logger.warning("No game spawns for " + gameId + "!"); player.teleport(lobbySpawn); }
+                if (!absoluteGameSpawns.isEmpty()) {
+                    player.teleport(absoluteGameSpawns.get(spawnIndex % absoluteGameSpawns.size())); spawnIndex++;
+                } else { this.logger.warning("No game spawns for instance " + instanceId.toString().substring(0,8) + "!"); player.teleport(absoluteLobbySpawn); }
             }
         }
         startCountdown();
         return true;
     }
 
-    @Override
-    public boolean start() { return this.start(false); }
-
     private void startCountdown() {
         cancelTasks();
-        final int[] currentCountdownValue = {countdownSeconds};
+        final int[] currentCountdownValue = {countdownSeconds}; // Use countdownSeconds from definition
         for (UUID uuid : playersInGame) {
             Player p = Bukkit.getPlayer(uuid);
             if (p != null) {
@@ -331,19 +282,18 @@ public class KoTHGame extends Game {
     private void activateGame() {
         if (gameState != GameState.STARTING) return;
         setGameState(GameState.ACTIVE);
-        broadcastToGamePlayers(ChatColor.GOLD + "" + ChatColor.BOLD + "KoTH game '" + gameId + "' has started! Capture the hill!");
-        this.logger.info("KoTH game " + gameId + " is now ACTIVE.");
+        broadcastToGamePlayers(ChatColor.GOLD + "" + ChatColor.BOLD + "KoTH Game '" + definition.getDisplayName() + "' has started! Capture the hill!");
+        this.logger.info("KoTH instance " + instanceId.toString().substring(0,8) + " is now ACTIVE.");
         this.gameTickTask = plugin.getServer().getScheduler().runTaskTimer(plugin, this::gameTick, 0L, 20L);
-        lastVoteTriggerTimeMillis = System.currentTimeMillis();
+        if (this.votingEnabled && this.voteManager != null) {
+            lastVoteTriggerTimeMillis = System.currentTimeMillis();
+        }
         updateAllScoreboards();
     }
 
     @Override
     public void stop(boolean force) {
-        if (gameState != GameState.ACTIVE && gameState != GameState.STARTING && !force) {
-            if (!force) return;
-        }
-        this.logger.info("KoTH game " + gameId + " is stopping. Forced: " + force);
+        this.logger.info("KoTH instance " + instanceId.toString().substring(0,8) + " is stopping. Forced: " + force);
         GameState previousState = gameState;
         setGameState(GameState.ENDING);
         cancelTasks();
@@ -358,11 +308,11 @@ public class KoTHGame extends Game {
             if (winnerUUID != null) {
                 Player winnerPlayer = Bukkit.getPlayer(winnerUUID);
                 winnerName = (winnerPlayer != null && winnerPlayer.isOnline()) ? winnerPlayer.getName() : "An unknown player";
-                broadcastToGamePlayers(ChatColor.GOLD + winnerName + " has won KoTH '" + gameId + "' with " + maxScore + " seconds on the hill!");
+                broadcastToGamePlayers(ChatColor.GOLD + winnerName + " has won KoTH with " + maxScore + " seconds on the hill!");
             } else if (!playersInGame.isEmpty()) {
-                broadcastToGamePlayers(ChatColor.YELLOW + "KoTH game '" + gameId + "' ended. No winner could be determined.");
+                broadcastToGamePlayers(ChatColor.YELLOW + "KoTH game ended. No winner could be determined.");
             } else if (previousState != GameState.WAITING && previousState != GameState.ENDING) {
-                broadcastToGamePlayers(ChatColor.YELLOW + "KoTH game '" + gameId + "' ended as there were no players.");
+                broadcastToGamePlayers(ChatColor.YELLOW + "KoTH game ended as there were no players.");
             }
         }
         for (UUID uuid : new HashSet<>(playersInGame)) {
@@ -379,78 +329,102 @@ public class KoTHGame extends Game {
                 GameScoreboard sb = playerScoreboards.remove(uuid);
                 if (sb != null) sb.destroy();
                 playerStateManager.restorePlayerState(player);
-                if (lobbySpawn != null) player.teleport(lobbySpawn);
+                if (absoluteLobbySpawn != null) player.teleport(absoluteLobbySpawn);
+                else player.teleport(getGameWorld().getSpawnLocation());
             } else {
                 playerStateManager.removePlayerState(Bukkit.getOfflinePlayer(uuid).getPlayer());
             }
         });
         playersInGame.clear();
 
-        if (this.arenaSchematicName != null && !this.arenaSchematicName.isEmpty() && this.arenaPasteLocation != null && this.gameState != GameState.DISABLED) {
-            this.logger.info("Resetting arena for game " + gameId + ": " + this.arenaSchematicName);
-            if (!plugin.getArenaManager().pasteSchematic(this.arenaSchematicName, this.arenaPasteLocation)) {
-                this.logger.severe("CRITICAL: Failed to reset arena for game " + gameId + "!");
-            } else { this.logger.info("Arena for " + gameId + " reset successfully."); }
-        }
+        // Actual arena reset will be handled by GameManager when it fully discards this instance
         setGameState(GameState.WAITING);
-        this.logger.info("KoTH game " + gameId + " is now WAITING.");
+        this.logger.info("KoTH instance " + instanceId.toString().substring(0,8) + " logic finished. Set to WAITING (or should be FINISHED).");
+        // GameManager should call cleanupInstance() which might then trigger ArenaManager.resetArena(this.arena, this.instanceBaseWorldLocation)
     }
 
     @Override
     public boolean addPlayer(Player player) {
-        if (gameState == GameState.DISABLED) { player.sendMessage(ChatColor.RED + "The game '" + gameId + "' is currently disabled."); return false; }
-        if (gameState != GameState.WAITING && gameState != GameState.STARTING) { player.sendMessage(ChatColor.RED + "The game '" + gameId + "' has already started or is ending."); return false; }
-        if (playersInGame.contains(player.getUniqueId())) { player.sendMessage(ChatColor.YELLOW + "You are already in this game."); return false; }
-
-        playerStateManager.savePlayerState(player);
-        playersInGame.add(player.getUniqueId());
-        playerScores.put(player.getUniqueId(), 0);
-        if (lobbySpawn != null) { player.teleport(lobbySpawn); }
-        else {
-            this.logger.severe("Lobby spawn is null for game " + gameId + "! Cannot teleport player " + player.getName());
-            player.sendMessage(ChatColor.RED + "Error: Lobby spawn not set for this game.");
-            playersInGame.remove(player.getUniqueId()); playerScores.remove(player.getUniqueId());
-            playerStateManager.restorePlayerState(player); return false;
+        this.logger.info("[KoTHInstance-" + instanceId.toString().substring(0,8) + "] Attempting to add player " + player.getName());
+        if (gameState == GameState.DISABLED) {
+            player.sendMessage(ChatColor.RED + "The game '" + definition.getDisplayName() + "' is currently disabled.");
+            return false;
+        }
+        if (gameState != GameState.WAITING && gameState != GameState.STARTING) {
+            player.sendMessage(ChatColor.RED + "The game '" + definition.getDisplayName() + "' has already started or is ending.");
+            return false;
+        }
+        if (playersInGame.contains(player.getUniqueId())) {
+            player.sendMessage(ChatColor.YELLOW + "You are already in this game.");
+            return false;
         }
 
+        int maxPlayers = definition.getRule("max_players", 16); // Example: get max_players rule
+        if (playersInGame.size() >= maxPlayers) {
+            player.sendMessage(ChatColor.RED + "This game instance is full (" + playersInGame.size() + "/" + maxPlayers + ")!");
+            return false;
+        }
+
+        playerStateManager.savePlayerState(player);
+
+        if (absoluteLobbySpawn == null) {
+            this.logger.severe("[KoTHInstance-" + instanceId.toString().substring(0,8) + "] CRITICAL: Lobby spawn is null! Cannot add player " + player.getName() + ".");
+            player.sendMessage(ChatColor.RED + "Error: Lobby spawn not set for this game. Please contact an admin.");
+            playerStateManager.restorePlayerState(player);
+            return false;
+        }
+        player.teleport(absoluteLobbySpawn);
+
+        playersInGame.add(player.getUniqueId());
+        playerScores.put(player.getUniqueId(), 0);
+
         if (gameState == GameState.STARTING || gameState == GameState.ACTIVE) {
-            playerStateManager.clearPlayerForGame(player, this.gamePlayGamemode);
+            playerStateManager.clearPlayerForGame(player, this.gameplayGamemode);
             GameScoreboard sb = new GameScoreboard(player, scoreboardTitle);
             playerScoreboards.put(player.getUniqueId(), sb);
             sb.show();
             updateScoreboard(player);
         }
-        player.sendMessage(ChatColor.GREEN + "You have joined KoTH game: " + gameId);
+
+        player.sendMessage(ChatColor.GREEN + "You have joined KoTH: " + definition.getDisplayName());
         broadcastToGamePlayers(ChatColor.AQUA + player.getName() + ChatColor.GRAY + " has joined the KoTH game! (" + playersInGame.size() + " players)");
         player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, SoundCategory.PLAYERS, 0.5f, 1.5f);
+        this.logger.info("[KoTHInstance-" + instanceId.toString().substring(0,8) + "] Successfully added player " + player.getName() + ". Total players: " + playersInGame.size());
         return true;
     }
 
     @Override
     public void removePlayer(Player player) {
+        this.logger.info("[KoTHInstance-" + instanceId.toString().substring(0,8) + "] Attempting to remove player " + player.getName());
         GameScoreboard sb = playerScoreboards.remove(player.getUniqueId());
         if (sb != null) sb.destroy();
+
         boolean wasInGame = playersInGame.remove(player.getUniqueId());
         playerScores.remove(player.getUniqueId());
+
         playerStateManager.restorePlayerState(player);
 
         if (wasInGame) {
-            player.sendMessage(ChatColor.GRAY + "You have left KoTH game: " + gameId);
+            player.sendMessage(ChatColor.GRAY + "You have left KoTH: " + definition.getDisplayName());
             broadcastToGamePlayers(ChatColor.AQUA + player.getName() + ChatColor.GRAY + " has left the KoTH game.");
             player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, SoundCategory.PLAYERS, 0.5f, 1.0f);
 
-            if (lobbySpawn != null && player.isOnline()) {
-                if (!player.getWorld().equals(lobbySpawn.getWorld()) || player.getLocation().distanceSquared(lobbySpawn) > 225) {
-                    player.teleport(lobbySpawn);
+            if (absoluteLobbySpawn != null && player.isOnline()) {
+                if (!player.getWorld().equals(absoluteLobbySpawn.getWorld()) || player.getLocation().distanceSquared(absoluteLobbySpawn) > 225) {
+                    player.teleport(absoluteLobbySpawn);
                 }
             }
             if ((gameState == GameState.ACTIVE || gameState == GameState.STARTING)) {
-                if (playersInGame.isEmpty() && minPlayersToStart > 0) {
+                int minPlayersRequired = definition.getRule("min_players_to_start", 2);
+                if (playersInGame.isEmpty() && minPlayersRequired > 0) {
                     broadcastToGamePlayers(ChatColor.YELLOW + "The last player left. The game is ending."); stop(false);
-                } else if (playersInGame.size() < minPlayersToStart && minPlayersToStart > 1) {
+                } else if (playersInGame.size() < minPlayersRequired && minPlayersRequired > 1) {
                     broadcastToGamePlayers(ChatColor.RED + "Not enough players to continue. The game is ending."); stop(false);
                 }
             }
+            this.logger.info("[KoTHInstance-" + instanceId.toString().substring(0,8) + "] Successfully removed player " + player.getName() + ". Remaining players: " + playersInGame.size());
+        } else {
+            this.logger.warning("[KoTHInstance-" + instanceId.toString().substring(0,8) + "] Player " + player.getName() + " was not in playersInGame set during removal attempt.");
         }
     }
 
@@ -467,14 +441,14 @@ public class KoTHGame extends Game {
 
         if (activeVotingHook != null && activeHookEndTimeMillis > 0 && System.currentTimeMillis() >= activeHookEndTimeMillis) {
             broadcastToGamePlayers(ChatColor.YELLOW + activeVotingHook.getDisplayName() + " has worn off!");
-            if (getHillCenter() != null) { // Ensure hillCenter is not null
-                ParticleUtil.spawnLocationEffect(getHillCenter(), Particle.SMOKE, 50, 0.5, 1, 0.5, 0.1);
-                getHillCenter().getWorld().playSound(getHillCenter(), Sound.BLOCK_FIRE_EXTINGUISH, SoundCategory.AMBIENT, 0.7f, 1f);
+            if (getAbsoluteHillCenter() != null) {
+                ParticleUtil.spawnLocationEffect(getAbsoluteHillCenter(), Particle.SMOKE, 50, 0.5, 1, 0.5, 0.1);
+                getAbsoluteHillCenter().getWorld().playSound(getAbsoluteHillCenter(), Sound.BLOCK_FIRE_EXTINGUISH, SoundCategory.AMBIENT, 0.7f, 1f);
             }
             activeVotingHook = null; activeHookEndTimeMillis = 0;
         }
 
-        if (votingEnabled && voteManager != null && !voteManager.isVoteActive() && !availableVotingHooks.isEmpty()) {
+        if (votingEnabled && voteManager != null && !voteManager.isVoteActive() && availableVotingHooks != null && !availableVotingHooks.isEmpty()) {
             if ((System.currentTimeMillis() - lastVoteTriggerTimeMillis) / 1000 >= voteIntervalSeconds) {
                 triggerVote();
             }
@@ -502,12 +476,12 @@ public class KoTHGame extends Game {
             if (newCapper != null) {
                 broadcastToGamePlayers(ChatColor.GOLD + newCapper.getName() + " has captured the hill!");
                 newCapper.playSound(newCapper.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, SoundCategory.PLAYERS, 1f, 1.2f);
-                if (getHillCenter() != null) getHillCenter().getWorld().playSound(getHillCenter(), Sound.BLOCK_BEACON_ACTIVATE, SoundCategory.AMBIENT, 0.8f, 1.5f);
+                if (getAbsoluteHillCenter() != null) getAbsoluteHillCenter().getWorld().playSound(getAbsoluteHillCenter(), Sound.BLOCK_BEACON_ACTIVATE, SoundCategory.AMBIENT, 0.8f, 1.5f);
             }
             playerCurrentlyOnHill = newHillHolderUUID;
         } else if (newHillHolderUUID == null && playerCurrentlyOnHill != null) {
             broadcastToGamePlayers(ChatColor.YELLOW + "The hill is now neutral!");
-            if (getHillCenter() != null) getHillCenter().getWorld().playSound(getHillCenter(), Sound.BLOCK_BEACON_DEACTIVATE, SoundCategory.AMBIENT, 0.8f, 1.0f);
+            if (getAbsoluteHillCenter() != null) getAbsoluteHillCenter().getWorld().playSound(getAbsoluteHillCenter(), Sound.BLOCK_BEACON_DEACTIVATE, SoundCategory.AMBIENT, 0.8f, 1.0f);
             playerCurrentlyOnHill = null;
         }
 
@@ -519,18 +493,18 @@ public class KoTHGame extends Game {
     }
 
     private void triggerVote() {
-        if (availableVotingHooks.isEmpty() || voteManager == null) {
-            this.logger.fine("TriggerVote called for " + gameId + " but no hooks/manager available.");
+        if (availableVotingHooks == null || availableVotingHooks.isEmpty() || voteManager == null) {
+            this.logger.fine("TriggerVote called for instance " + instanceId.toString().substring(0,8) + " but no hooks/manager available.");
             return;
         }
-        this.logger.info("Attempting to trigger vote for " + gameId);
+        this.logger.info("Attempting to trigger vote for instance " + instanceId.toString().substring(0,8));
         List<VotingHook> optionsForVote = new ArrayList<>();
         List<VotingHook> hooksPool = new ArrayList<>(availableVotingHooks);
         Collections.shuffle(hooksPool);
         int numberOfOptionsToPresent = Math.min(hooksPool.size(), 3);
         if (numberOfOptionsToPresent < 2 && hooksPool.size() >=2) { numberOfOptionsToPresent = 2; }
         else if (hooksPool.size() < 2) {
-            this.logger.warning("Not enough unique voting hooks for " + gameId + " (need >= 2, have " + hooksPool.size() + ")");
+            this.logger.warning("Not enough unique voting hooks for instance " + instanceId.toString().substring(0,8) + " (need >= 2, have " + hooksPool.size() + ")");
             lastVoteTriggerTimeMillis = System.currentTimeMillis(); return;
         }
         for (int i = 0; i < numberOfOptionsToPresent && !hooksPool.isEmpty(); ) {
@@ -538,31 +512,31 @@ public class KoTHGame extends Game {
             if (selectedHook.canApply(this)) { optionsForVote.add(selectedHook); i++; }
         }
         if (optionsForVote.size() < 2) {
-            this.logger.warning("Could not find enough applicable hooks for " + gameId + " (found " + optionsForVote.size() + ").");
+            this.logger.warning("Could not find enough applicable hooks for instance " + instanceId.toString().substring(0,8) + " (found " + optionsForVote.size() + ").");
             lastVoteTriggerTimeMillis = System.currentTimeMillis(); return;
         }
         if (voteManager.startVote(optionsForVote, voteEventDurationSeconds)) {
             lastVoteTriggerTimeMillis = System.currentTimeMillis();
         } else {
-            this.logger.warning("VoteManager failed to start vote for " + gameId);
+            this.logger.warning("VoteManager failed to start vote for instance " + instanceId.toString().substring(0,8));
             lastVoteTriggerTimeMillis = System.currentTimeMillis();
         }
     }
 
     private boolean isPlayerOnHill(Player player) {
-        if (hillCenter == null || !player.getWorld().equals(hillCenter.getWorld())) return false;
+        if (absoluteHillCenter == null || !player.getWorld().equals(absoluteHillCenter.getWorld())) return false;
         Location playerFootLoc = player.getLocation();
-        if (Math.abs(playerFootLoc.getY() - hillCenter.getY()) <= 1.5) {
-            double dx = playerFootLoc.getX() - hillCenter.getX();
-            double dz = playerFootLoc.getZ() - hillCenter.getZ();
-            return (dx * dx + dz * dz) <= hillRadiusSquared;
+        if (Math.abs(playerFootLoc.getY() - absoluteHillCenter.getY()) <= 1.5) {
+            double dx = playerFootLoc.getX() - absoluteHillCenter.getX();
+            double dz = playerFootLoc.getZ() - absoluteHillCenter.getZ();
+            return (dx * dx + dz * dz) <= currentHillRadiusSquared;
         }
         return false;
     }
 
     @Override
     public void broadcastToGamePlayers(String message) {
-        String prefix = ChatColor.DARK_AQUA + "[KoTH-" + gameId + "] " + ChatColor.RESET;
+        String prefix = ChatColor.DARK_AQUA + "[KoTH-" + definition.getDisplayName() + "] " + ChatColor.RESET;
         for (UUID uuid : playersInGame) {
             Player p = Bukkit.getPlayer(uuid);
             if (p != null && p.isOnline()) p.sendMessage(prefix + message);
@@ -617,76 +591,49 @@ public class KoTHGame extends Game {
         return String.format("%02d:%02d", minutes, seconds);
     }
 
+    // setActiveVotingHook is inherited from GameInstance and calls super.setActiveVotingHook()
+    // then updates scoreboards. We can add specific particles/sounds here if needed.
+    @Override
     public void setActiveVotingHook(VotingHook hook) {
-        this.activeVotingHook = hook;
+        super.setActiveVotingHook(hook); // Sets activeVotingHook and activeHookEndTimeMillis
         if (hook != null) {
-            this.logger.info("Activating voting hook: " + hook.getDisplayName() + " for game " + gameId);
-            if (getHillCenter() != null) {
-                ParticleUtil.spawnExplosionEffect(getHillCenter().clone().add(0,1,0), Particle.LAVA, 70, 0.7f);
-                ParticleUtil.spawnHelixEffect(getHillCenter().clone().add(0,0.5,0), Particle.FLAME, 1.5, 3, 20, 2);
-                getHillCenter().getWorld().playSound(getHillCenter(), Sound.ENTITY_WITHER_SPAWN, SoundCategory.AMBIENT, 0.5f, 1.2f);
+            this.logger.info("Activating voting hook: " + hook.getDisplayName() + " for KoTH instance " + instanceId.toString().substring(0,8));
+            if (getAbsoluteHillCenter() != null) {
+                ParticleUtil.spawnExplosionEffect(getAbsoluteHillCenter().clone().add(0,1,0), Particle.LAVA, 70, 0.7f);
+                ParticleUtil.spawnHelixEffect(getAbsoluteHillCenter().clone().add(0,0.5,0), Particle.FLAME, 1.5, 3, 20, 2);
+                getAbsoluteHillCenter().getWorld().playSound(getAbsoluteHillCenter(), Sound.ENTITY_WITHER_SPAWN, SoundCategory.AMBIENT, 0.5f, 1.2f);
             }
-            if (hook.getDurationSeconds() > 0) {
-                this.activeHookEndTimeMillis = System.currentTimeMillis() + (hook.getDurationSeconds() * 1000L);
-            } else {
-                this.activeHookEndTimeMillis = 0;
+        } else { // Hook ended
+            if (getAbsoluteHillCenter() != null) {
+                getAbsoluteHillCenter().getWorld().playSound(getAbsoluteHillCenter(), Sound.BLOCK_CONDUIT_DEACTIVATE, SoundCategory.PLAYERS, 0.6f, 1f);
             }
-        } else {
-            this.activeHookEndTimeMillis = 0;
         }
         updateAllScoreboards();
     }
 
-    /**
-     * Sets the hill radius temporarily, e.g., for a voting hook.
-     * Stores the original radius if this is the first shrink, and reverts to it if 'shrinking' is false.
-     * @param newRadius The new radius for the hill.
-     */
     public void setTemporaryHillRadius(int newRadius) {
-        this.logger.info("Setting temporary hill radius for " + gameId + " to " + newRadius + ". Original was " + this.originalHillRadius);
-        this.hillRadius = newRadius;
-        this.hillRadiusSquared = newRadius * newRadius;
-        // Scoreboard will update on next tick to reflect any changes if needed.
-        // Or force an update: updateAllScoreboards(playerCurrentlyOnHill != null ? Bukkit.getPlayer(playerCurrentlyOnHill).getName() : null);
+        this.logger.info("Setting temporary hill radius for instance " + instanceId.toString().substring(0,8) + " to " + newRadius + ". Original was " + this.originalHillRadius);
+        this.currentHillRadius = newRadius;
+        this.currentHillRadiusSquared = newRadius * newRadius;
+        broadcastToGamePlayers(ChatColor.YELLOW + "The hill's capture zone has changed size!");
     }
 
+    public Location getAbsoluteHillCenter() { return this.absoluteHillCenter; }
+    public int getCurrentHillRadius() { return this.currentHillRadius; }
 
-    public Location getHillCenter() { return this.hillCenter; }
-    public int getHillRadius() { return this.hillRadius; } // Returns current operational radius
-    public VoteManager getVoteManager() { return this.voteManager; }
-
-    public void setHillLocation(Location location) {
-        if (location == null || gameConfig == null) { this.logger.warning("Attempt to set null location or gameConfig is null for " + gameId); return; }
-        this.hillCenter = location.clone();
-        ConfigurationSection kothSettingsSection = gameConfig.getConfigurationSection("koth_settings");
-        if (kothSettingsSection == null) kothSettingsSection = gameConfig.createSection("koth_settings");
-        ConfigurationSection hillSection = kothSettingsSection.getConfigurationSection("hill_center");
-        if (hillSection == null) hillSection = kothSettingsSection.createSection("hill_center");
-        LocationUtil.saveLocation(hillSection, this.hillCenter, false);
-        plugin.getConfigManager().saveGameConfig("koth", this.gameId, gameConfig);
-        this.logger.info("KoTH '" + gameId + "' hill center set and saved: " + location.toString());
-        broadcastToGamePlayers(ChatColor.YELLOW + "Admin: Hill location updated.");
+    // Admin commands for temporary instance modification (not saved to definition)
+    public void adminSetHillLocation(Location location) {
+        if (location == null) { this.logger.warning("Admin attempt to set null hill location for instance " + instanceId.toString().substring(0,8)); return; }
+        this.absoluteHillCenter = location.clone();
+        this.logger.info("KoTH instance " + instanceId.toString().substring(0,8) + " hill center administratively set to: " + location.toString() + " (Current match only).");
+        broadcastToGamePlayers(ChatColor.YELLOW + "Admin: Hill location has been updated for this match.");
     }
 
-    public void setHillRadius(int radius) { // This sets the permanent original radius
-        if (radius <= 0 || gameConfig == null) { this.logger.warning("Attempt to set invalid radius ("+radius+") or gameConfig is null for " + gameId); return; }
-        this.originalHillRadius = radius; // Update the original radius
-        this.hillRadius = radius;         // Also update current operational radius
-        this.hillRadiusSquared = radius * radius;
-        gameConfig.set("koth_settings.hill_radius", radius);
-        plugin.getConfigManager().saveGameConfig("koth", this.gameId, gameConfig);
-        this.logger.info("KoTH '" + gameId + "' base hill radius set and saved: " + radius);
-        broadcastToGamePlayers(ChatColor.YELLOW + "Admin: Hill radius updated to " + radius + ".");
-    }
-
-    @Override
-    public World getGameWorld() {
-        if (this.arenaPasteLocation != null && this.arenaPasteLocation.getWorld() != null) return this.arenaPasteLocation.getWorld();
-        if (this.hillCenter != null && this.hillCenter.getWorld() != null) return this.hillCenter.getWorld();
-        World foundWorld = Bukkit.getWorld(worldName);
-        if (foundWorld == null && gameState != GameState.DISABLED) {
-            this.logger.log(Level.WARNING, "getGameWorld() for " + gameId + ": world '" + worldName + "' not loaded!");
-        }
-        return foundWorld;
+    public void adminSetHillRadius(int radius) {
+        if (radius <= 0) { this.logger.warning("Admin attempt to set invalid hill radius ("+radius+") for instance " + instanceId.toString().substring(0,8)); return; }
+        this.currentHillRadius = radius; // Modifies current operational radius
+        this.currentHillRadiusSquared = radius * radius;
+        this.logger.info("KoTH instance " + instanceId.toString().substring(0,8) + " hill radius administratively set to: " + radius + " (Current match only).");
+        broadcastToGamePlayers(ChatColor.YELLOW + "Admin: Hill radius has been updated to " + radius + " for this match.");
     }
 }

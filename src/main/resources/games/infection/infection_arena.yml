@@ -1,25 +1,25 @@
-# File: plugins/AndromedaGames/games/infection/infected_arena.yml
+# File: plugins/AndromedaGames/games/infection/infection_arena.yml
 
 game_id: "infected_arena"
-game_type: "INFECTION" # Important for GameManager if it handles multiple types
+game_type: "INFECTION"
 enabled: true
 world: "minigame_world" # Replace with your actual world name
 
 arena:
-  schematic_name: "infection_map_1" # In plugins/AndromedaGames/schematics/
+  schematic_name: "infection_map_1"
   paste_location:
     x: -50.0
     y: 70.0
     z: 150.0
 
 infection_settings:
-  initial_infected_count: 1 # Number of players who start as infected
-  game_duration_seconds: 300 # 5 minutes for survivors to win if not all infected
-  countdown_seconds: 15     # Time before the first infected is revealed and game starts
+  initial_infected_count: 1
+  game_duration_seconds: 300
+  countdown_seconds: 15
   scoreboard_title: "&c&lINFECTION"
-  survivor_gamemode: "SURVIVAL" # Gamemode for survivors
-  infected_gamemode: "SURVIVAL" # Gamemode for infected (could be ADVENTURE for restrictions)
-  min_players_to_start: 2 # Minimum players to start an infection game
+  survivor_gamemode: "SURVIVAL"
+  infected_gamemode: "SURVIVAL"
+  min_players_to_start: 2
 
 spawns:
   lobby:
@@ -28,17 +28,18 @@ spawns:
     z: 145.0
     yaw: 0.0
     pitch: 0.0
-  game_area: # All players spawn here initially; then one (or more) become infected
+  game_area:
     - { x: -55.0, y: 71.0, z: 155.0, yaw: 0.0, pitch: 0.0 }
     - { x: -60.0, y: 71.0, z: 150.0, yaw: 90.0, pitch: 0.0 }
     - { x: -55.0, y: 71.0, z: 145.0, yaw: 180.0, pitch: 0.0 }
     - { x: -50.0, y: 71.0, z: 150.0, yaw: -90.0, pitch: 0.0 }
 
-# Voting hook settings (can be added later for Infection)
-# voting:
-#   enabled: false
-#   interval_seconds: 75
-#   duration_seconds: 15
-#   hooks_available:
-#     - "infection_slow_all"
-#     - "infection_reveal_survivors"
+voting:
+  enabled: true # Enable voting for this Infection game
+  interval_seconds: 75 # How often a vote occurs (e.g., every 75 seconds of active game time)
+  duration_seconds: 15 # How long players have to cast their vote
+  hooks_available: # List of VotingHook IDs that can be chosen for this game
+    - "infection_reveal_survivors"
+    - "infection_survivor_speed_boost"
+    - "infection_infected_speed_boost"
+    # Add more Infection-specific hook IDs here as they are created
